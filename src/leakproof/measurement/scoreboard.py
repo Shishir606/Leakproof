@@ -40,6 +40,7 @@ class Scoreboard(BaseModel):
     completed_at: datetime
     duration_seconds: int
     cases_processed: int
+    cases_by_leak_type: dict[str, int]
     throughput_cases_per_minute: float
     treatment: ArmMetrics
     holdout: ArmMetrics
@@ -187,6 +188,14 @@ def compute_scoreboard(session: Session, run_id: str) -> Scoreboard:
         completed_at=completed_at,
         duration_seconds=duration_seconds,
         cases_processed=len(cases),
+        cases_by_leak_type=dict(
+            sorted(
+                {
+                    leak_type: sum(case.leak_type == leak_type for case in cases)
+                    for leak_type in {case.leak_type for case in cases}
+                }.items()
+            )
+        ),
         throughput_cases_per_minute=round(len(cases) * 60 / duration_seconds, 3),
         treatment=treatment,
         holdout=holdout,

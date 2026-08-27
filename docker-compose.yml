@@ -68,5 +68,18 @@ services:
     <<: *app
     command: ["celery", "-A", "leakproof.celery_app:celery", "beat", "--loglevel=INFO"]
 
+  dashboard:
+    build:
+      context: ./dashboard
+    environment:
+      API_BASE_URL: http://api:8000
+      HOSTNAME: 0.0.0.0
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   leakproof-postgres:

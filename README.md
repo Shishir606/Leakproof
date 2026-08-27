@@ -2,7 +2,7 @@
 
 **One recovery spine for five revenue-leak surfaces.**
 
-This repository contains the August 25 foundation through the September 1 evaluation slice.
+This repository contains the August 25 foundation through the September 2 dashboard slice.
 A FastAPI receiver verifies Razorpay HMAC signatures, commits each raw webhook
 to a durable Postgres inbox, deduplicates by provider event ID, and only then asks a Celery worker
 to normalize it. A fixed-seed simulator sends all five revenue-leak types through that same case
@@ -28,7 +28,7 @@ FastAPI ──commit──> Postgres webhook inbox                    │
                                       scoped circuit breaker
 ```
 
-## Run the August 25–September 1 slices
+## Run the August 25–September 2 slices
 
 Docker Desktop must be running.
 
@@ -45,13 +45,15 @@ make test-august-29
 make test-august-30
 make test-august-31
 make test-september-1
+make test-september-2
 make evals
 ```
 
 The `make up` path builds one `leakproof-app:latest` application image, starts Postgres and Redis,
 applies the foundation schema and append-only enforcement migrations, then starts the API, Celery
 worker, and Celery Beat. The migration job and all three application services reuse the same image;
-Postgres and Redis remain separate infrastructure containers. Beat also rescans the durable inbox
+Postgres and Redis remain separate infrastructure containers. The Next.js dashboard is available
+at `http://localhost:3000` and reads the same API data used by the acceptance tests. Beat also rescans the durable inbox
 every minute, so a webhook committed during a temporary broker outage is not lost.
 
 `make verify-foundation` runs a fresh end-to-end check against the live API, Celery worker, and
@@ -264,6 +266,29 @@ make test-september-1
 make evals
 ```
 
+## September 2: recordable scoreboard and case timeline
+
+The Next.js dashboard ships the two screens on the demo critical path. The Scoreboard reads the
+latest measured batch and separates gross recovery from the stratified holdout counterfactual,
+incremental recovery, intervention and model costs, and net value. It also shows throughput, the
+five leak surfaces, false chases, circuit-breaker suppressions, EV declines, human escalations,
+unresolved exceptions, and the latest retained evaluation status. Synthetic runs are labelled on
+screen rather than presented as production outcomes.
+
+The Case Timeline uses the append-only audit spine directly. A filterable case index opens the
+assignment, deterministic diagnosis and rule ID, bounded ladder, complete gate results, executed
+or denied actions, provider reference, verification, and final outcome in order. The projection is
+replayed and checked on every detail request, and the same record can be downloaded as `audit.json`.
+There is no mock dashboard dataset: an unavailable API or missing seed produces an explicit empty
+state.
+
+`make up` serves the dashboard with the rest of the stack. For frontend-only development, keep the
+API on port 8000 and run `make dashboard`. Run the September 2 acceptance slice with:
+
+```bash
+make test-september-2
+```
+
 Run the acceptance tests locally:
 
 ```bash
@@ -301,15 +326,22 @@ The tests demonstrate:
 - attribution windows vary by leak type and advance from the latest successful touch;
 - last-touch and organic payment credit are persisted without claiming late payments;
 - the scoreboard computes holdout lift, incremental recovery, costs, net value, and exceptions.
+- the latest batch scoreboard includes the case mix required by the dashboard;
+- filtered case reads expose diagnosis, plans, attribution, and ordered audit events;
+- the recordable Scoreboard and Case Timeline compile as a production Next.js application.
 
 ## API
 
 - `POST /webhooks/razorpay` — HMAC verification, durable inbox, dedupe, async enqueue
+- `GET /cases?state=&leak_type=` — filterable case index for the timeline
+- `GET /cases/{case_id}` — case, diagnosis, action ladder, attribution, and audit timeline
+- `GET /cases/{case_id}/audit.json` — exportable append-only audit record
 - `GET /cases/{case_id}/replay` — stored projection, ordered events, replayed state
 - `GET /suppressions` — currently open circuit breakers
 - `POST /suppressions/{id}/close` — human circuit-breaker override
 - `GET /costs` — LLM token, cost, latency, and schema-success rollup
 - `GET /scoreboard/{run_id}` — holdout lift, incremental recovery, cost, and safety metrics
+- `GET /scoreboard/latest` — most recent measured batch for the dashboard
 - `GET /evals/latest` — latest cohort and injection metrics with pass/fail gates
 - `GET /health/live` and `GET /health/ready` — process and database health
 
@@ -323,7 +355,7 @@ scheduled checkout, invoice, subscription, and 24-hour reconciliation entry poin
 cadences are registered with Celery Beat, but their live upstream provider adapters still return
 empty scan results until later integration slices. Diagnosis, planning, scheduling, pre-flight
 gating, simulated interventions, payment-success cancellation, aggregate incident reasoning,
-scope-specific suppression, and LLM accounting are built. Live provider calls, full recovery
-verification outside the Razorpay success-webhook path, and a visual dashboard remain reserved for
-later build slices. Attribution, holdout enforcement, the scoreboard API, and the reproducible
-September 1 evaluation harness are built.
+scope-specific suppression, and LLM accounting are built. Live provider calls and full recovery
+verification outside the Razorpay success-webhook path remain reserved for later build slices.
+Attribution, holdout enforcement, the scoreboard API, the reproducible September 1 evaluation
+harness, and the September 2 Scoreboard and Case Timeline are built.
