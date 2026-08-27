@@ -1,0 +1,56 @@
+- id: T1_MERCHANT_CONFIG
+  match: {error_source: business}
+  class: MERCHANT_FAULT
+  confidence: 0.98
+  customer_contact_allowed: false
+
+- id: T1_INSTRUMENT_DEAD
+  match:
+    error_reason: [card_expired, token_expired, card_blocked, invalid_card, mandate_expired, mandate_revoked]
+  class: INSTRUMENT_DEAD
+  confidence: 0.95
+  retry_allowed: false
+
+- id: T1_TIMING
+  match: {error_reason: [insufficient_funds, exceeds_limit]}
+  class: TIMING
+  confidence: 0.92
+  retry_allowed: true
+  retry_strategy: payday
+
+- id: T1_TRANSIENT
+  match:
+    error_source: [gateway, bank]
+    error_step: payment_authorization
+  class: TRANSIENT
+  confidence: 0.85
+  retry_allowed: true
+  retry_strategy: exponential
+  customer_contact_allowed: false
+
+- id: T1_FRICTION
+  match:
+    error_source: customer
+    error_step: payment_authentication
+  class: FRICTION
+  confidence: 0.88
+  retry_allowed: true
+  retry_strategy: immediate
+
+- id: T1_CHECKOUT_FRICTION
+  match: {error_reason: checkout_abandoned}
+  class: FRICTION
+  confidence: 0.94
+  retry_allowed: false
+
+- id: T1_INTENT_ABSENT
+  match: {error_reason: [payment_cancelled_by_user]}
+  class: INTENT_ABSENT
+  confidence: 0.90
+  max_contacts: 1
+
+- id: T1_FALLBACK
+  match: {}
+  class: UNKNOWN
+  confidence: 0.30
+  escalate_to_tier2: true

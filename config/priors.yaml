@@ -1,0 +1,30 @@
+defaults:
+  alpha: 2
+  beta: 8
+cells:
+  TRANSIENT:
+    silent_retry: {alpha: 7, beta: 3}
+  TIMING:
+    silent_retry: {alpha: 5, beta: 5}
+    email_link: {alpha: 3, beta: 7}
+  INSTRUMENT_DEAD:
+    alt_method_prompt: {alpha: 4, beta: 6}
+  FRICTION:
+    alt_method_prompt: {alpha: 6, beta: 4}
+    email_link: {alpha: 4, beta: 6}
+  SLOW_BUT_GOOD:
+    email_link: {alpha: 6, beta: 4}
+    whatsapp_link: {alpha: 7, beta: 3}
+  CASHFLOW_STRESSED:
+    email_link: {alpha: 4, beta: 6}
+    whatsapp_link: {alpha: 5, beta: 5}
+  DELINQUENT:
+    email_link: {alpha: 2, beta: 8}
+    human_handoff: {alpha: 4, beta: 6}
+segment_cells:
+  SLOW_BUT_GOOD:
+    B2B:
+      voice_hinglish: {alpha: 6, beta: 4}
+  INSTRUMENT_DEAD:
+    B2C:
+      whatsapp_link: {alpha: 4, beta: 6}

@@ -1,0 +1,58 @@
+simulation:
+  seed: 42
+  as_of: "2026-08-26T12:00:00Z"
+  merchant_name: "Leakproof Synthetic Merchant"
+
+scale:
+  customers: 5000
+  months: 12
+  orders_per_customer_per_month: {dist: poisson, lambda: 1.4}
+  subscriptions_pct: 0.35
+  b2b_invoice_customers: 400
+
+amounts:
+  b2c_order_paise: {dist: lognormal, mu: 7.4, sigma: 0.9}
+  subscription_paise:
+    dist: choice
+    values: [4900, 19900, 49900]
+    weights: [0.6, 0.3, 0.1]
+  b2b_invoice_paise: {dist: lognormal, mu: 11.9, sigma: 1.1}
+
+failure:
+  base_rate: 0.062
+  class_mix:
+    TIMING: 0.31
+    TRANSIENT: 0.22
+    FRICTION: 0.24
+    INSTRUMENT_DEAD: 0.13
+    MERCHANT_FAULT: 0.04
+    INTENT_ABSENT: 0.06
+
+organic_recovery:
+  TIMING: {rate: 0.42, delay_days: {dist: gamma, k: 2, theta: 3}}
+  TRANSIENT: {rate: 0.55, delay_days: {dist: gamma, k: 1, theta: 1}}
+  FRICTION: {rate: 0.38, delay_days: {dist: gamma, k: 1.5, theta: 2}}
+  INSTRUMENT_DEAD: {rate: 0.09, delay_days: {dist: gamma, k: 3, theta: 8}}
+  MERCHANT_FAULT: {rate: 0.0}
+  INTENT_ABSENT: {rate: 0.04}
+  invoice_overdue: {rate: 0.61, delay_days: {dist: gamma, k: 3, theta: 9}}
+
+treatment_effect:
+  silent_retry: {TIMING: 0.19, TRANSIENT: 0.34, INSTRUMENT_DEAD: 0.0}
+  whatsapp_link: {FRICTION: 0.21, TIMING: 0.11, INSTRUMENT_DEAD: 0.16}
+  sms_link: {FRICTION: 0.12, TIMING: 0.06}
+  voice_hinglish: {invoice_overdue: 0.24}
+  fatigue_penalty_per_extra_contact: -0.04
+  opt_out_prob_per_contact: 0.012
+
+scenarios:
+  issuer_outage: {failures: 47, duration_minutes: 40, issuer: HDFC, method: netbanking, failure_rate: 0.90}
+  expired_card_cohort: {customers: 180, expiry_window_days: 7}
+  merchant_misconfig: {failures: 40, duration_hours: 6}
+  payday_clustering: {failures: 60, first_day: 26, last_day: 31}
+  invoice_aging: {overdue_invoices: 160, max_days_overdue: 90}
+
+breadth:
+  checkout_abandonment: 100
+  subscription_halt: 100
+  mandate_broken: 100

@@ -1,0 +1,51 @@
+# The classifier derives aging_bucket, payer_history and invoice_size before
+# evaluating this ordered matrix. First match wins and its stable id is audited.
+- id: R1_DISPUTED
+  match: {disputed: true}
+  class: DISPUTED
+  confidence: 0.99
+
+- id: R2_SLOW_BUT_GOOD
+  match:
+    aging_bucket: [1-7, 8-30]
+    payer_history: GOOD
+    invoice_size: [SMALL, MEDIUM, LARGE]
+  class: SLOW_BUT_GOOD
+  confidence: 0.93
+
+- id: R3_GOOD_PAYER_STRETCHED
+  match:
+    aging_bucket: 31-90
+    payer_history: GOOD
+    invoice_size: [SMALL, MEDIUM, LARGE]
+  class: CASHFLOW_STRESSED
+  confidence: 0.82
+
+- id: R4_CASHFLOW_STRESSED
+  match:
+    aging_bucket: [1-7, 8-30]
+    payer_history: STRESSED
+    invoice_size: [SMALL, MEDIUM, LARGE]
+  class: CASHFLOW_STRESSED
+  confidence: 0.86
+
+- id: R5_DELINQUENT_STRESSED
+  match:
+    aging_bucket: 31-90
+    payer_history: STRESSED
+    invoice_size: [SMALL, MEDIUM, LARGE]
+  class: DELINQUENT
+  confidence: 0.89
+
+- id: R6_DELINQUENT_RISKY
+  match:
+    aging_bucket: [1-7, 8-30, 31-90]
+    payer_history: RISKY
+    invoice_size: [SMALL, MEDIUM, LARGE]
+  class: DELINQUENT
+  confidence: 0.96
+
+- id: R7_FALLBACK
+  match: {}
+  class: DELINQUENT
+  confidence: 0.55

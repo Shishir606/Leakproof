@@ -1,0 +1,34 @@
+stopping_rules:
+  - {id: SR1_PAID, when: case.verified_paid, decision: DENY}
+  - {id: SR2_OPT_OUT, when: customer.dnc, decision: DENY}
+  - {id: SR3_DISPUTE, when: case.disputed, decision: DEFER_TO_HUMAN}
+  - {id: SR4_BUDGET, when: case.attempts >= plan.max_steps or case.retries >= 3, decision: DENY}
+  - {id: SR5_SUPPRESSED, when: suppression_matches(case), decision: DENY}
+  - {id: SR6_MERCHANT_FAULT, when: diagnosis.class == MERCHANT_FAULT and action.is_customer_facing, decision: DENY}
+  - {id: SR7_PROTECTED, when: customer.protected, decision: DEFER_TO_HUMAN}
+consent:
+  required_for: [whatsapp, sms, voice]
+  check: consents.granted == true
+  decision_if_absent: DENY
+frequency:
+  max_contacts_per_customer_7d: 4
+  min_hours_between_same_channel: 48
+  min_hours_between_any_contact: 24
+schedule:
+  contact_window_ist: {start: "08:00", end: "19:00"}
+  decision_outside_window: RESCHEDULE
+  blackout_dates: []
+money:
+  max_retry_attempts_per_instrument: 3
+  retry_backoff_hours: [6, 24, 72]
+  never_exceed: [mandate.max_amount, invoice.outstanding]
+  emandate:
+    pre_debit_notice_hours: 24
+    afa_free_ceiling_paise: 1500000
+    afa_free_ceiling_special_paise: 10000000
+  two_key_above_paise: 5000000
+  two_key_actions: [voice_call, voice_hinglish, human_handoff]
+tone:
+  penalty_language: {forbidden_unless: merchant.policy.allow_penalty_language}
+  legal_language: forbidden
+  third_party_contact: forbidden

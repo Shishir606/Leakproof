@@ -1,0 +1,17 @@
+attribution:
+  windows_days:
+    PAYMENT_FAILURE: 7
+    CHECKOUT_ABANDON: 7
+    SUBSCRIPTION_HALT: 14
+    INVOICE_OVERDUE: 21
+    MANDATE_BROKEN: 14
+  credit_rule: last_touch
+  amount_tolerance_pct: 1.0
+
+holdout:
+  fraction: 0.10
+  stratify_by: [leak_type, amount_band]
+  seed: 42
+  amount_bands_paise:
+    low_max: 100000
+    medium_max: 1000000

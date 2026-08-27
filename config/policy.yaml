@@ -1,0 +1,3 @@
+margin: 1.0
+annoyance_lambda: 0.02
+exploratory_below_observations: 30

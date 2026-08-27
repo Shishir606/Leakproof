@@ -1,0 +1,59 @@
+- id: util_invoice_reminder_v3
+  channel: whatsapp
+  dlt_or_meta_ref: "1007xxxxxxxxxxxx"
+  variables: [payer_name, invoice_no, amount, due_date, link]
+  tone: soft
+  languages: [en-IN, hi-IN, hinglish]
+  content:
+    en-IN: "Hello {payer_name}, invoice {invoice_no} for {amount} was due on {due_date}. Pay securely: {link}"
+    hi-IN: "Namaste {payer_name}, invoice {invoice_no} ki {amount} rashi {due_date} ko due thi. Surakshit payment: {link}"
+    hinglish: "Namaste {payer_name}, invoice {invoice_no} ka {amount} payment {due_date} ko due tha. Secure link: {link}"
+
+- id: util_recovery_in_app_v1
+  channel: in_app
+  dlt_or_meta_ref: "internal:recovery-in-app-v1"
+  variables: [customer_ref, amount, link]
+  tone: soft
+  languages: [en-IN, hi-IN]
+  content:
+    en-IN: "Payment of {amount} needs attention. Choose another payment method: {link}"
+    hi-IN: "{amount} ka payment poora karne ke liye doosra payment method chunein: {link}"
+
+- id: util_recovery_email_v1
+  channel: email
+  dlt_or_meta_ref: "internal:recovery-email-v1"
+  variables: [customer_ref, amount, link]
+  tone: soft
+  languages: [en-IN, hi-IN]
+  content:
+    en-IN: "Hello {customer_ref}, complete your {amount} payment securely: {link}"
+    hi-IN: "Namaste {customer_ref}, apna {amount} payment surakshit roop se poora karein: {link}"
+
+- id: util_recovery_whatsapp_v1
+  channel: whatsapp
+  dlt_or_meta_ref: "meta:recovery-whatsapp-v1"
+  variables: [customer_ref, amount, link]
+  tone: soft
+  languages: [en-IN, hi-IN]
+  content:
+    en-IN: "Hello {customer_ref}, complete your {amount} payment securely: {link}"
+    hi-IN: "Namaste {customer_ref}, apna {amount} payment surakshit roop se poora karein: {link}"
+
+- id: util_recovery_sms_v1
+  channel: sms
+  dlt_or_meta_ref: "dlt:recovery-sms-v1"
+  variables: [customer_ref, amount, link]
+  tone: soft
+  languages: [en-IN, hi-IN]
+  content:
+    en-IN: "Complete your {amount} payment securely: {link}"
+    hi-IN: "Apna {amount} payment surakshit roop se poora karein: {link}"
+
+- id: util_recovery_voice_v1
+  channel: voice
+  dlt_or_meta_ref: "internal:recovery-voice-v1"
+  variables: [customer_ref, amount, link]
+  tone: soft
+  languages: [hinglish]
+  content:
+    hinglish: "Namaste {customer_ref}, aapke {amount} payment ke baare mein madad ke liye call kiya hai."

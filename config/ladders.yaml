@@ -1,0 +1,111 @@
+- id: payment_timing
+  leak_type: PAYMENT_FAILURE
+  failure_classes: [TIMING]
+  max_steps: 3
+  steps:
+    - {action: silent_retry, delay_hours: 0}
+    - {action: email_link, delay_hours: 24}
+    - {action: whatsapp_link, delay_hours: 72}
+
+- id: payment_transient
+  leak_type: PAYMENT_FAILURE
+  failure_classes: [TRANSIENT]
+  max_steps: 3
+  steps:
+    - {action: silent_retry, delay_hours: 0}
+    - {action: silent_retry, delay_hours: 0}
+    - {action: silent_retry, delay_hours: 0}
+
+- id: payment_friction
+  leak_type: PAYMENT_FAILURE
+  failure_classes: [FRICTION]
+  max_steps: 3
+  steps:
+    - {action: alt_method_prompt, delay_hours: 0.5}
+    - {action: email_link, delay_hours: 24}
+    - {action: whatsapp_link, delay_hours: 72}
+
+- id: payment_instrument_dead
+  leak_type: PAYMENT_FAILURE
+  failure_classes: [INSTRUMENT_DEAD]
+  max_steps: 3
+  steps:
+    - {action: alt_method_prompt, delay_hours: 0}
+    - {action: email_link, delay_hours: 24}
+    - {action: whatsapp_link, delay_hours: 72}
+
+- id: payment_intent_absent
+  leak_type: PAYMENT_FAILURE
+  failure_classes: [INTENT_ABSENT]
+  max_steps: 1
+  steps:
+    - {action: email_link, delay_hours: 1}
+
+- id: payment_non_customer
+  leak_type: PAYMENT_FAILURE
+  failure_classes: [MERCHANT_FAULT, UNKNOWN]
+  max_steps: 1
+  steps:
+    - {action: human_handoff, delay_hours: 0}
+
+- id: checkout_friction
+  leak_type: CHECKOUT_ABANDON
+  failure_classes: [FRICTION, UNKNOWN]
+  max_steps: 2
+  steps:
+    - {action: email_link, delay_hours: 0.5}
+    - {action: whatsapp_link, delay_hours: 24}
+
+- id: subscription_recovery
+  leak_type: SUBSCRIPTION_HALT
+  failure_classes: [TIMING, TRANSIENT, FRICTION]
+  max_steps: 3
+  steps:
+    - {action: silent_retry, delay_hours: 0}
+    - {action: email_link, delay_hours: 24}
+    - {action: whatsapp_link, delay_hours: 72}
+
+- id: subscription_instrument_dead
+  leak_type: SUBSCRIPTION_HALT
+  failure_classes: [INSTRUMENT_DEAD, UNKNOWN]
+  max_steps: 3
+  steps:
+    - {action: alt_method_prompt, delay_hours: 0}
+    - {action: email_link, delay_hours: 24}
+    - {action: whatsapp_link, delay_hours: 72}
+
+- id: invoice_soft
+  leak_type: INVOICE_OVERDUE
+  failure_classes: [SLOW_BUT_GOOD, CASHFLOW_STRESSED]
+  max_steps: 4
+  steps:
+    - {action: email_link, delay_hours: 0}
+    - {action: sms_link, delay_hours: 72}
+    - {action: whatsapp_link, delay_hours: 72}
+    - {action: voice_hinglish, delay_hours: 96}
+
+- id: invoice_delinquent
+  leak_type: INVOICE_OVERDUE
+  failure_classes: [DELINQUENT]
+  max_steps: 4
+  steps:
+    - {action: email_link, delay_hours: 0}
+    - {action: sms_link, delay_hours: 72}
+    - {action: whatsapp_link, delay_hours: 72}
+    - {action: human_handoff, delay_hours: 120}
+
+- id: invoice_disputed
+  leak_type: INVOICE_OVERDUE
+  failure_classes: [DISPUTED]
+  max_steps: 1
+  steps:
+    - {action: human_handoff, delay_hours: 0}
+
+- id: mandate_new_instrument
+  leak_type: MANDATE_BROKEN
+  failure_classes: [INSTRUMENT_DEAD, UNKNOWN]
+  max_steps: 3
+  steps:
+    - {action: alt_method_prompt, delay_hours: 0}
+    - {action: email_link, delay_hours: 24}
+    - {action: whatsapp_link, delay_hours: 72}

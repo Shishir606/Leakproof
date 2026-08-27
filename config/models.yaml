@@ -1,0 +1,11 @@
+routes:
+  cohort_scan:
+    primary: {model: small, max_tokens: 1200}
+    escalate_if: {confidence_below: 0.70, schema_violation: true}
+    escalate_to: {model: large, max_tokens: 2000}
+  draft_fill:
+    primary: {model: small}
+budgets:
+  per_batch_paise: 50000
+  per_case_paise: 200
+  alert_at_pct: 0.8
