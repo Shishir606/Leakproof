@@ -31,7 +31,7 @@ def _aware(value: datetime) -> datetime:
 
 
 class CohortWindow(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     from_: datetime = Field(alias="from")
     to: datetime
@@ -43,21 +43,21 @@ class CohortWindow(BaseModel):
 
 
 class CohortTotals(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     attempts: int = Field(ge=0)
     failures: int = Field(ge=0)
 
 
 class CohortBaseline(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     failure_rate_7d: float = Field(ge=0, le=1)
     failure_rate_1h: float = Field(ge=0, le=1)
 
 
 class CohortSlice(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     dim: dict[str, str]
     attempts: int = Field(ge=0)
@@ -75,7 +75,7 @@ class CohortSlice(BaseModel):
 
 
 class CohortScanInput(BaseModel):
-    model_config = ConfigDict(frozen=True, populate_by_name=True)
+    model_config = ConfigDict(frozen=True, populate_by_name=True, extra="forbid")
 
     window: CohortWindow
     totals: CohortTotals
@@ -85,7 +85,7 @@ class CohortScanInput(BaseModel):
 
 
 class CohortAnomaly(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     pattern: Literal[
         "issuer_outage",
@@ -107,7 +107,7 @@ class CohortAnomaly(BaseModel):
 
 
 class CohortScanOutput(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     anomalies: list[CohortAnomaly] = Field(default_factory=list)
 

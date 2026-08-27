@@ -1,0 +1,5 @@
+{
+  "model": "deterministic-cohort-v1",
+  "overall_f1": 1.0,
+  "prompt_version": "cohort_scan_v1"
+}

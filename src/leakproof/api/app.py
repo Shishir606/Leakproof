@@ -15,7 +15,7 @@ from leakproof.celery_app import process_webhook
 from leakproof.config import get_policy_config, get_settings
 from leakproof.db import get_session
 from leakproof.measurement import Scoreboard, compute_scoreboard
-from leakproof.models.db import LLMCall, Suppression
+from leakproof.models.db import EvalRun, LLMCall, Suppression
 from leakproof.models.domain import ReplayedCase
 from leakproof.sensors.webhooks import (
     InvalidWebhookSignature,
@@ -51,6 +51,23 @@ class SuppressionView(BaseModel):
     opened_at: datetime
     expires_at: datetime
     opened_by: str
+
+
+class EvalRunView(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: int
+    suite: str
+    prompt_version: str | None
+    model: str | None
+    metrics: dict
+    passed: bool
+    ran_at: datetime
+
+
+class LatestEvalsView(BaseModel):
+    overall_passed: bool
+    runs: list[EvalRunView]
 
 
 def enqueue_webhook(webhook_id: int) -> None:
@@ -180,6 +197,23 @@ def llm_costs(session: SessionDep) -> dict:
             for purpose, count, cost in by_purpose
         ],
     }
+
+
+@app.get("/evals/latest", response_model=LatestEvalsView)
+def latest_evals(session: SessionDep) -> LatestEvalsView:
+    latest_by_suite: dict[str, EvalRun] = {}
+    for run in session.scalars(select(EvalRun).order_by(EvalRun.ran_at.desc(), EvalRun.id.desc())):
+        latest_by_suite.setdefault(run.suite, run)
+    if not latest_by_suite:
+        raise HTTPException(status_code=404, detail="no evaluation runs found")
+    views = [
+        EvalRunView.model_validate(run, from_attributes=True)
+        for run in sorted(latest_by_suite.values(), key=lambda item: item.suite)
+    ]
+    return LatestEvalsView(
+        overall_passed=all(item.passed for item in views),
+        runs=views,
+    )
 
 
 @app.get("/scoreboard/{run_id}", response_model=Scoreboard)

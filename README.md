@@ -2,7 +2,7 @@
 
 **One recovery spine for five revenue-leak surfaces.**
 
-This repository contains the August 25 foundation through the August 31 measurement slice.
+This repository contains the August 25 foundation through the September 1 evaluation slice.
 A FastAPI receiver verifies Razorpay HMAC signatures, commits each raw webhook
 to a durable Postgres inbox, deduplicates by provider event ID, and only then asks a Celery worker
 to normalize it. A fixed-seed simulator sends all five revenue-leak types through that same case
@@ -28,7 +28,7 @@ FastAPI ──commit──> Postgres webhook inbox                    │
                                       scoped circuit breaker
 ```
 
-## Run the August 25–31 slices
+## Run the August 25–September 1 slices
 
 Docker Desktop must be running.
 
@@ -44,6 +44,8 @@ make test-august-28
 make test-august-29
 make test-august-30
 make test-august-31
+make test-september-1
+make evals
 ```
 
 The `make up` path builds one `leakproof-app:latest` application image, starts Postgres and Redis,
@@ -237,6 +239,31 @@ Run the August 31 acceptance slice alone:
 make test-august-31
 ```
 
+## September 1: cohort and adversarial evaluation harness
+
+`make evals` runs two reproducible, committed corpora. The cohort suite contains 120 aggregate
+windows: 40 labeled anomalies across all five supported patterns, 50 threshold near-misses, and
+30 clean windows. It reports precision, recall, and F1 per pattern and overall, and fails when F1
+regresses by more than two percentage points from the last passing persisted run or when the
+false-suppression rate exceeds 5%. The default offline transport is deterministic, so this gate is
+free and repeatable; it evaluates the simulation transport, not the quality of a hosted model.
+
+The injection suite contains 64 untrusted-text payloads across instruction overrides, fake system
+messages, tool abuse, guardrail bypasses, exfiltration requests, multilingual attacks, encoded
+variants, and benign lookalikes. Every payload is checked against a stripped-input control: the
+gate verdict and state must remain identical, the action must come from `config/actions.yaml`, the
+message must be a `TemplateRegistry` product, and model output must contain no PII. Any bypass
+fails the run. Benign lookalikes must continue to produce the clean `ALLOW` result.
+
+Results are retained in `eval_runs`, written to `evals/report.json`, and exposed through
+`GET /evals/latest`. GitHub Actions runs lint, the full tests, and the no-database evaluation gate
+on every push and pull request. Run this slice alone with:
+
+```bash
+make test-september-1
+make evals
+```
+
 Run the acceptance tests locally:
 
 ```bash
@@ -283,6 +310,7 @@ The tests demonstrate:
 - `POST /suppressions/{id}/close` — human circuit-breaker override
 - `GET /costs` — LLM token, cost, latency, and schema-success rollup
 - `GET /scoreboard/{run_id}` — holdout lift, incremental recovery, cost, and safety metrics
+- `GET /evals/latest` — latest cohort and injection metrics with pass/fail gates
 - `GET /health/live` and `GET /health/ready` — process and database health
 
 Raw money values are paise (`BIGINT`) and timestamps are timezone-aware. Actuator calls and the
@@ -297,4 +325,5 @@ empty scan results until later integration slices. Diagnosis, planning, scheduli
 gating, simulated interventions, payment-success cancellation, aggregate incident reasoning,
 scope-specific suppression, and LLM accounting are built. Live provider calls, full recovery
 verification outside the Razorpay success-webhook path, and a visual dashboard remain reserved for
-later build slices. Attribution, holdout enforcement, and the scoreboard API are built.
+later build slices. Attribution, holdout enforcement, the scoreboard API, and the reproducible
+September 1 evaluation harness are built.

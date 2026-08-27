@@ -1,4 +1,4 @@
-.PHONY: install lint test test-august-27 test-august-28 test-august-29 test-august-30 test-august-31 build up down migrate demo-webhook verify-foundation seed tunnel
+.PHONY: install lint test test-august-27 test-august-28 test-august-29 test-august-30 test-august-31 test-september-1 evals build up down migrate demo-webhook verify-foundation seed tunnel
 
 install:
 	uv sync --extra dev
@@ -23,6 +23,12 @@ test-august-30:
 
 test-august-31:
 	uv run pytest tests/test_measurement.py
+
+test-september-1:
+	uv run pytest tests/test_evals.py
+
+evals:
+	LEAKPROOF_DATABASE_URL=postgresql+psycopg://leakproof:leakproof@localhost:55432/leakproof uv run python scripts/run_evals.py
 
 build:
 	docker compose build api
