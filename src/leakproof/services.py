@@ -33,6 +33,8 @@ class NormalizedSignal:
     currency: str
     evidence: dict
     occurred_at: datetime
+    dedupe_key_override: str | None = None
+    arm_override: Arm | None = None
 
 
 def new_id(prefix: str) -> str:
@@ -41,6 +43,8 @@ def new_id(prefix: str) -> str:
 
 
 def dedupe_key(signal: NormalizedSignal) -> str:
+    if signal.dedupe_key_override:
+        return signal.dedupe_key_override
     if signal.leak_type == LeakType.PAYMENT_FAILURE:
         root = signal.entity_root_id or signal.entity_id
         return f"pf:{signal.customer_id}:{root}"
@@ -139,12 +143,22 @@ def record_signal(session: Session, signal: NormalizedSignal) -> tuple[RecoveryC
     )
     created = case is None
     if created:
-        assignment = assigned_arm(
-            signal.merchant_id,
-            signal.customer_id,
-            signal.leak_type,
-            signal.amount_at_risk,
-            (signal.evidence.get("simulation") or {}).get("assignment_key"),
+        assignment = (
+            ArmAssignment(
+                arm=signal.arm_override,
+                bucket=10_000,
+                fraction=0,
+                seed=get_measurement_config().holdout.seed,
+                stratum="live_demo",
+            )
+            if signal.arm_override is not None
+            else assigned_arm(
+                signal.merchant_id,
+                signal.customer_id,
+                signal.leak_type,
+                signal.amount_at_risk,
+                (signal.evidence.get("simulation") or {}).get("assignment_key"),
+            )
         )
         simulation = signal.evidence.get("simulation") or {}
         case = RecoveryCase(

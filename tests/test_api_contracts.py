@@ -172,17 +172,23 @@ def assert_typed_error(response, expected_code: str = "integration_not_ready") -
     }
 
 
-def test_demo_session_route_has_a_typed_skeleton(client):
+def test_demo_session_route_returns_frozen_checkout_contract(client):
     response = client.post("/demo/sessions", json={"recipient": "reviewer@example.com"})
 
-    assert_typed_error(response)
+    assert response.status_code == 201
+    assert response.json()["razorpay_key_id"] == "rzp_test_simulated"
+    assert response.json()["razorpay_order_id"] == "order_fake_1"
+    assert response.json()["amount_paise"] == 50_000
+    assert response.json()["currency"] == "INR"
+    assert response.json()["email_mode"] == "preview_only"
 
 
 @pytest.mark.parametrize("event_type", [event.value for event in CheckoutEventType])
 def test_checkout_event_route_locks_all_four_event_types(client, event_type: str):
+    created = client.post("/demo/sessions", json={}).json()
     response = client.post(
-        "/demo/sessions/session-1/checkout-events",
-        headers={"x-leakproof-session-token": "token-1"},
+        f"/demo/sessions/{created['session_id']}/checkout-events",
+        headers={"x-leakproof-session-token": created["session_token"]},
         json={
             "client_event_id": f"client-{event_type}",
             "event_type": event_type,
@@ -191,7 +197,8 @@ def test_checkout_event_route_locks_all_four_event_types(client, event_type: str
         },
     )
 
-    assert_typed_error(response)
+    assert response.status_code == 200
+    assert response.json() == {"accepted": True, "duplicate": False, "event_id": 1}
 
 
 def test_checkout_event_route_requires_session_token_with_typed_error(client):

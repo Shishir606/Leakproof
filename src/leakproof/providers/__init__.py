@@ -12,6 +12,7 @@ from leakproof.providers.contracts import (
     PaymentProvider,
     ProviderError,
 )
+from leakproof.providers.razorpay import RazorpayPaymentProvider
 
 __all__ = [
     "CaseInsightProvider",
@@ -24,4 +25,5 @@ __all__ = [
     "PaymentOrder",
     "PaymentProvider",
     "ProviderError",
+    "RazorpayPaymentProvider",
 ]

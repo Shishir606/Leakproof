@@ -19,15 +19,26 @@ class FakePaymentProvider:
     orders: dict[str, PaymentOrder] = field(default_factory=dict)
     payments: dict[str, Payment] = field(default_factory=dict)
     create_calls: list[CreateOrderRequest] = field(default_factory=list)
+    order_idempotency: dict[str, str] = field(default_factory=dict)
     failure: ProviderError | None = None
 
     def create_order(self, request: CreateOrderRequest) -> PaymentOrder:
         self.create_calls.append(request)
         if self.failure:
             raise self.failure
+        existing_id = self.order_idempotency.get(request.idempotency_key)
+        if existing_id is not None:
+            return self.orders[existing_id]
         order_id = f"order_fake_{len(self.orders) + 1}"
-        order = PaymentOrder(order_id, request.amount_paise, request.currency, "created")
+        order = PaymentOrder(
+            order_id,
+            request.amount_paise,
+            request.currency,
+            "created",
+            request_id=f"req_order_fake_{len(self.orders) + 1}",
+        )
         self.orders[order_id] = order
+        self.order_idempotency[request.idempotency_key] = order_id
         return order
 
     def fetch_payment(self, payment_id: str) -> Payment:

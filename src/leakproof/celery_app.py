@@ -9,8 +9,11 @@ from sqlalchemy import select
 from leakproof.actuators import due_action_ids, execute_action
 from leakproof.config import get_settings
 from leakproof.db import SessionLocal
+from leakproof.demo.service import due_abandonment_checks, materialize_checkout_abandonment
 from leakproof.diagnosis.tier2 import run_cohort_scan
 from leakproof.models.db import RecoveryCase, WebhookEvent
+from leakproof.providers import ProviderError
+from leakproof.providers.factory import get_payment_provider
 from leakproof.sensors.pollers import (
     poll_checkout_abandonment,
     poll_invoice_aging,
@@ -36,6 +39,10 @@ celery.conf.update(
         "dispatch-due-actions": {
             "task": "leakproof.dispatch_due_actions",
             "schedule": 30.0,
+        },
+        "dispatch-due-demo-abandonments": {
+            "task": "leakproof.dispatch_due_demo_abandonments",
+            "schedule": 15.0,
         },
         "cohort-scan-10m": {
             "task": "leakproof.scan_failure_cohorts",
@@ -106,6 +113,32 @@ def dispatch_due_actions(limit: int = 100) -> int:
     for action_id in ids:
         run_action.delay(action_id)
     return len(ids)
+
+
+@celery.task(
+    name="leakproof.check_demo_abandonment",
+    autoretry_for=(ProviderError,),
+    retry_backoff=True,
+    max_retries=5,
+)
+def check_demo_abandonment(session_id: str, dismissal_event_id: int) -> str | None:
+    with SessionLocal() as session:
+        return materialize_checkout_abandonment(
+            session,
+            session_id,
+            dismissal_event_id,
+            provider=get_payment_provider(),
+            settings=get_settings(),
+        )
+
+
+@celery.task(name="leakproof.dispatch_due_demo_abandonments")
+def dispatch_due_demo_abandonments(limit: int = 100) -> int:
+    with SessionLocal() as session:
+        checks = due_abandonment_checks(session, settings=get_settings(), limit=limit)
+    for session_id, dismissal_event_id in checks:
+        check_demo_abandonment.delay(session_id, dismissal_event_id)
+    return len(checks)
 
 
 @celery.task(name="leakproof.scan_failure_cohorts")

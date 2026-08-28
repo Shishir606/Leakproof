@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from leakproof.audit.timeline import replay_case
 from leakproof.batch import BatchResult, run_full_batch
-from leakproof.celery_app import process_webhook
+from leakproof.celery_app import check_demo_abandonment, process_webhook
 from leakproof.config import get_policy_config, get_settings
 from leakproof.db import get_session
 from leakproof.demo import (
@@ -27,6 +27,14 @@ from leakproof.demo import (
     RazorpayWebhookEnvelope,
     RecoveryBootstrap,
     ResendWebhookEnvelope,
+)
+from leakproof.demo.rate_limit import RateLimitUnavailable
+from leakproof.demo.service import (
+    DemoRateLimitExceeded,
+    DemoSessionExpired,
+    DemoSessionUnauthorized,
+    create_demo_session,
+    ingest_checkout_event,
 )
 from leakproof.measurement import ExceptionReport, Scoreboard, compute_scoreboard, exception_report
 from leakproof.models.db import (
@@ -42,6 +50,8 @@ from leakproof.models.db import (
     Suppression,
 )
 from leakproof.models.domain import CaseState, LeakType, ReplayedCase
+from leakproof.providers import PaymentProvider, ProviderError
+from leakproof.providers.factory import get_demo_rate_limiter, get_payment_provider
 from leakproof.sensors.webhooks import (
     InvalidWebhookSignature,
     persist_webhook,
@@ -62,6 +72,8 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Leakproof API", version="0.1.0", lifespan=lifespan)
 SessionDep = Annotated[Session, Depends(get_session)]
+PaymentProviderDep = Annotated[PaymentProvider, Depends(get_payment_provider)]
+DemoRateLimiterDep = Annotated[Any, Depends(get_demo_rate_limiter)]
 
 
 class WebhookAccepted(BaseModel):
@@ -76,11 +88,16 @@ def contract_error(
     message: str,
     *,
     retryable: bool = False,
+    headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     body = APIError(
         error=APIErrorDetail(code=code, message=message, retryable=retryable)
     )
-    return JSONResponse(status_code=status_code, content=body.model_dump(mode="json"))
+    return JSONResponse(
+        status_code=status_code,
+        content=body.model_dump(mode="json"),
+        headers=headers,
+    )
 
 
 class SuppressionView(BaseModel):
@@ -310,37 +327,115 @@ def resend_webhook_skeleton(
     "/demo/sessions",
     response_model=DemoSessionCreated,
     status_code=status.HTTP_201_CREATED,
-    responses={503: {"model": APIError}},
+    responses={429: {"model": APIError}, 502: {"model": APIError}, 503: {"model": APIError}},
 )
-def create_demo_session_skeleton(request: DemoSessionCreateRequest) -> JSONResponse:
-    del request
-    return contract_error(
-        503,
-        "integration_not_ready",
-        "Razorpay order creation is scheduled for the 30 August slice",
-        retryable=True,
-    )
+def create_demo_session_route(
+    payload: DemoSessionCreateRequest,
+    request: Request,
+    session: SessionDep,
+    provider: PaymentProviderDep,
+    limiter: DemoRateLimiterDep,
+) -> DemoSessionCreated | JSONResponse:
+    settings = get_settings()
+    client_ip = request.client.host if request.client is not None else "unknown"
+    try:
+        return create_demo_session(
+            session,
+            payload,
+            client_ip=client_ip,
+            provider=provider,
+            limiter=limiter,
+            settings=settings,
+        )
+    except DemoRateLimitExceeded as exc:
+        return contract_error(
+            429,
+            "rate_limit_exceeded",
+            "demo session limit exceeded",
+            retryable=True,
+            headers={"Retry-After": str(max(1, exc.retry_after_seconds))},
+        )
+    except RateLimitUnavailable:
+        return contract_error(
+            503,
+            "rate_limit_unavailable",
+            "demo session creation is temporarily unavailable",
+            retryable=True,
+        )
+    except ProviderError as exc:
+        return contract_error(
+            503 if exc.retryable else 502,
+            exc.error_class,
+            "Razorpay order creation failed",
+            retryable=exc.retryable,
+        )
 
 
 @app.post(
     "/demo/sessions/{session_id}/checkout-events",
     response_model=CheckoutEventReceipt,
-    responses={401: {"model": APIError}, 503: {"model": APIError}},
+    responses={
+        401: {"model": APIError},
+        410: {"model": APIError},
+        429: {"model": APIError},
+        503: {"model": APIError},
+    },
 )
-def checkout_event_skeleton(
+def checkout_event_route(
     session_id: str,
-    request: CheckoutEventRequest,
+    payload: CheckoutEventRequest,
+    session: SessionDep,
+    limiter: DemoRateLimiterDep,
     x_leakproof_session_token: str = Header(default=""),
-) -> JSONResponse:
-    del session_id, request
+) -> CheckoutEventReceipt | JSONResponse:
     if not x_leakproof_session_token:
         return contract_error(401, "session_token_required", "session token is required")
-    return contract_error(
-        503,
-        "integration_not_ready",
-        "Checkout telemetry ingestion is scheduled for the 30 August slice",
-        retryable=True,
-    )
+    settings = get_settings()
+    try:
+        ingested = ingest_checkout_event(
+            session,
+            session_id,
+            payload,
+            session_token=x_leakproof_session_token,
+            limiter=limiter,
+            settings=settings,
+        )
+    except DemoSessionUnauthorized:
+        return contract_error(401, "invalid_session_token", "invalid session token")
+    except DemoSessionExpired:
+        return contract_error(410, "session_expired", "demo session has expired")
+    except DemoRateLimitExceeded as exc:
+        return contract_error(
+            429,
+            "rate_limit_exceeded",
+            "checkout event limit exceeded",
+            retryable=exc.retry_after_seconds > 0,
+            headers=(
+                {"Retry-After": str(max(1, exc.retry_after_seconds))}
+                if exc.retry_after_seconds > 0
+                else None
+            ),
+        )
+    except RateLimitUnavailable:
+        return contract_error(
+            503,
+            "rate_limit_unavailable",
+            "checkout telemetry is temporarily unavailable",
+            retryable=True,
+        )
+
+    if ingested.dismissal_event_id is not None:
+        try:
+            check_demo_abandonment.apply_async(
+                args=[session_id, ingested.dismissal_event_id],
+                countdown=settings.demo_abandonment_delay_seconds,
+            )
+        except Exception:
+            logger.exception(
+                "dismissal persisted; immediate abandonment enqueue failed",
+                extra={"session_id": session_id, "event_id": ingested.dismissal_event_id},
+            )
+    return ingested.receipt
 
 
 @app.get(

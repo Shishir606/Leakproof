@@ -13,6 +13,8 @@ class ProviderError(RuntimeError):
     error_class: str
     retryable: bool
     message: str
+    request_id: str | None = None
+    status_code: int | None = None
 
     def __str__(self) -> str:
         return self.message

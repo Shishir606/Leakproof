@@ -391,6 +391,26 @@ make install
 make test
 ```
 
+## Live API integration: 30 August checkpoint
+
+`POST /demo/sessions` now creates a fixed ₹500 Razorpay test order through the provider-neutral
+payment boundary and returns only the public Checkout key, original order ID, opaque session ID,
+signed session token, amount, currency, expiry, and email mode. The browser cannot choose the
+amount or currency. Allowlisted reviewer addresses are encrypted at rest; other recipients stay
+in `preview_only` mode and are never retained in plaintext.
+
+Checkout telemetry accepts only the four frozen event types, binds every request to the signed
+session token, deduplicates by browser event ID, and enforces both rolling Redis limits and a
+database cap. A dismissal schedules a 30-second Celery re-check. The worker re-reads later browser
+events and Razorpay payment state before creating one treatment-only `CHECKOUT_ABANDON` case. A
+15-second Beat scan rescues a persisted dismissal if the immediate broker handoff fails.
+
+Run this API checkpoint with:
+
+```bash
+make test-api-august-30
+```
+
 The tests demonstrate:
 
 - invalid signatures are rejected before persistence;
@@ -435,6 +455,8 @@ The tests demonstrate:
 
 ## API
 
+- `POST /demo/sessions` — fixed Razorpay test order and signed Checkout session bootstrap
+- `POST /demo/sessions/{session_id}/checkout-events` — bounded, idempotent browser telemetry
 - `POST /webhooks/razorpay` — HMAC verification, durable inbox, dedupe, async enqueue
 - `POST /batch/run` — execute or idempotently replay the full synthetic batch
 - `GET /cases?state=&leak_type=` — filterable case index for the timeline

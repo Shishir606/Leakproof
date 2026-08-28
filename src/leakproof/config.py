@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     resend_webhook_secret: str = ""
     resend_from_email: str = ""
     demo_email_allowlist: str = ""
+    demo_amount_paise: int = Field(default=50_000, ge=100)
+    demo_currency: Literal["INR"] = "INR"
+    demo_session_ttl_minutes: int = Field(default=30, ge=5, le=120)
+    demo_sessions_per_ip_hour: int = Field(default=10, ge=1, le=100)
+    demo_checkout_events_per_session: int = Field(default=100, ge=4, le=1_000)
+    demo_abandonment_delay_seconds: int = Field(default=30, ge=1, le=300)
     resend_daily_limit: int = Field(default=100, gt=0)
     resend_monthly_limit: int = Field(default=3_000, gt=0)
 
