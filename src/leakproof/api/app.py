@@ -6,15 +6,29 @@ from datetime import UTC, date, datetime
 from typing import Annotated
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request, status
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from leakproof.audit.timeline import replay_case
+from leakproof.batch import BatchResult, run_full_batch
 from leakproof.celery_app import process_webhook
 from leakproof.config import get_policy_config, get_settings
 from leakproof.db import get_session
-from leakproof.measurement import Scoreboard, compute_scoreboard
+from leakproof.demo import (
+    APIError,
+    APIErrorDetail,
+    CheckoutEventReceipt,
+    CheckoutEventRequest,
+    DemoSessionCreated,
+    DemoSessionCreateRequest,
+    DemoSessionProjection,
+    RazorpayWebhookEnvelope,
+    RecoveryBootstrap,
+    ResendWebhookEnvelope,
+)
+from leakproof.measurement import ExceptionReport, Scoreboard, compute_scoreboard, exception_report
 from leakproof.models.db import (
     Action,
     BatchRun,
@@ -33,6 +47,7 @@ from leakproof.sensors.webhooks import (
     persist_webhook,
     verify_razorpay_signature,
 )
+from leakproof.simulator.generate import generate_dataset, load_parameters
 from leakproof.voice import handle_voice_turn
 
 logger = logging.getLogger(__name__)
@@ -40,6 +55,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    get_settings()  # enforce mode-specific startup gates
     get_policy_config()  # fail startup on malformed policy/configuration
     yield
 
@@ -52,6 +68,19 @@ class WebhookAccepted(BaseModel):
     accepted: bool = True
     duplicate: bool
     webhook_id: int
+
+
+def contract_error(
+    status_code: int,
+    code: str,
+    message: str,
+    *,
+    retryable: bool = False,
+) -> JSONResponse:
+    body = APIError(
+        error=APIErrorDetail(code=code, message=message, retryable=retryable)
+    )
+    return JSONResponse(status_code=status_code, content=body.model_dump(mode="json"))
 
 
 class SuppressionView(BaseModel):
@@ -80,6 +109,16 @@ class EvalRunView(BaseModel):
 class LatestEvalsView(BaseModel):
     overall_passed: bool
     runs: list[EvalRunView]
+
+
+class BatchRunRequest(BaseModel):
+    seed: int = 42
+
+
+class BatchRunView(BaseModel):
+    run: dict[str, str | int | bool]
+    scoreboard: Scoreboard
+    exceptions: ExceptionReport
 
 
 class CaseListItem(BaseModel):
@@ -230,11 +269,10 @@ async def razorpay_webhook(
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
     try:
-        payload = await request.json()
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="invalid JSON payload") from exc
-    if not isinstance(payload, dict) or not payload.get("event"):
-        raise HTTPException(status_code=422, detail="webhook event is required")
+        envelope = RazorpayWebhookEnvelope.model_validate_json(body)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail="invalid Razorpay webhook envelope") from exc
+    payload = envelope.model_dump(mode="json")
 
     ingested = persist_webhook(
         session,
@@ -246,6 +284,98 @@ async def razorpay_webhook(
         # Queue I/O happens after the response is sent; Beat rescues a missed handoff.
         background_tasks.add_task(enqueue_webhook, ingested.id)
     return WebhookAccepted(duplicate=ingested.duplicate, webhook_id=ingested.id)
+
+
+@app.post(
+    "/webhooks/resend",
+    response_model=WebhookAccepted,
+    responses={503: {"model": APIError}},
+)
+def resend_webhook_skeleton(
+    payload: ResendWebhookEnvelope,
+    svix_id: str = Header(default=""),
+    svix_timestamp: str = Header(default=""),
+    svix_signature: str = Header(default=""),
+) -> JSONResponse:
+    del payload, svix_id, svix_timestamp, svix_signature
+    return contract_error(
+        503,
+        "integration_not_ready",
+        "Resend webhook processing is scheduled for the 2 September slice",
+        retryable=True,
+    )
+
+
+@app.post(
+    "/demo/sessions",
+    response_model=DemoSessionCreated,
+    status_code=status.HTTP_201_CREATED,
+    responses={503: {"model": APIError}},
+)
+def create_demo_session_skeleton(request: DemoSessionCreateRequest) -> JSONResponse:
+    del request
+    return contract_error(
+        503,
+        "integration_not_ready",
+        "Razorpay order creation is scheduled for the 30 August slice",
+        retryable=True,
+    )
+
+
+@app.post(
+    "/demo/sessions/{session_id}/checkout-events",
+    response_model=CheckoutEventReceipt,
+    responses={401: {"model": APIError}, 503: {"model": APIError}},
+)
+def checkout_event_skeleton(
+    session_id: str,
+    request: CheckoutEventRequest,
+    x_leakproof_session_token: str = Header(default=""),
+) -> JSONResponse:
+    del session_id, request
+    if not x_leakproof_session_token:
+        return contract_error(401, "session_token_required", "session token is required")
+    return contract_error(
+        503,
+        "integration_not_ready",
+        "Checkout telemetry ingestion is scheduled for the 30 August slice",
+        retryable=True,
+    )
+
+
+@app.get(
+    "/recover/{signed_token}",
+    response_model=RecoveryBootstrap,
+    responses={503: {"model": APIError}},
+)
+def recovery_skeleton(signed_token: str) -> JSONResponse:
+    del signed_token
+    return contract_error(
+        503,
+        "integration_not_ready",
+        "Signed recovery bootstrap is scheduled for the 31 August slice",
+        retryable=True,
+    )
+
+
+@app.get(
+    "/demo/sessions/{session_id}",
+    response_model=DemoSessionProjection,
+    responses={401: {"model": APIError}, 503: {"model": APIError}},
+)
+def demo_session_projection_skeleton(
+    session_id: str,
+    x_leakproof_session_token: str = Header(default=""),
+) -> JSONResponse:
+    del session_id
+    if not x_leakproof_session_token:
+        return contract_error(401, "session_token_required", "session token is required")
+    return contract_error(
+        503,
+        "integration_not_ready",
+        "Live session projection is not available until session creation is implemented",
+        retryable=True,
+    )
 
 
 @app.get("/cases", response_model=CaseListView)
@@ -411,7 +541,8 @@ def close_suppression(suppression_id: int, session: SessionDep) -> SuppressionVi
 
 
 @app.get("/costs")
-def llm_costs(session: SessionDep) -> dict:
+def llm_costs(session: SessionDep, run_id: str | None = None) -> dict:
+    run_filter = [LLMCall.batch_run_id == run_id] if run_id else []
     totals = session.execute(
         select(
             func.count(LLMCall.id),
@@ -419,11 +550,13 @@ def llm_costs(session: SessionDep) -> dict:
             func.coalesce(func.sum(LLMCall.output_tokens), 0),
             func.coalesce(func.sum(LLMCall.cost_paise), 0),
             func.coalesce(func.sum(LLMCall.latency_ms), 0),
-        )
+        ).where(*run_filter)
     ).one()
     schema_ok_calls = int(
         session.scalar(
-            select(func.count(LLMCall.id)).where(LLMCall.schema_ok.is_(True))
+            select(func.count(LLMCall.id)).where(
+                LLMCall.schema_ok.is_(True), *run_filter
+            )
         )
         or 0
     )
@@ -432,7 +565,7 @@ def llm_costs(session: SessionDep) -> dict:
             LLMCall.purpose,
             func.count(LLMCall.id),
             func.coalesce(func.sum(LLMCall.cost_paise), 0),
-        ).group_by(LLMCall.purpose)
+        ).where(*run_filter).group_by(LLMCall.purpose)
     ).all()
     calls = int(totals[0])
     return {
@@ -467,6 +600,23 @@ def latest_evals(session: SessionDep) -> LatestEvalsView:
     )
 
 
+@app.post("/batch/run", response_model=BatchRunView)
+def run_batch(request: BatchRunRequest, session: SessionDep) -> BatchRunView:
+    if get_settings().mode != "simulation":
+        raise HTTPException(status_code=409, detail="batch simulation requires MODE=simulation")
+    parameters = load_parameters()
+    dataset = generate_dataset(parameters, seed=request.seed)
+    tuned_parameters = parameters.model_copy(
+        update={"simulation": parameters.simulation.model_copy(update={"seed": request.seed})}
+    )
+    result: BatchResult = run_full_batch(session, dataset, tuned_parameters)
+    return BatchRunView(
+        run=result.as_dict(),
+        scoreboard=compute_scoreboard(session, dataset.run_id),
+        exceptions=exception_report(session, dataset.run_id),
+    )
+
+
 @app.get("/scoreboard/latest", response_model=Scoreboard)
 def latest_scoreboard(session: SessionDep) -> Scoreboard:
     run = session.scalar(
@@ -491,3 +641,10 @@ def scoreboard(run_id: str, session: SessionDep) -> Scoreboard:
         raise HTTPException(status_code=404, detail="batch run not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.get("/scoreboard/{run_id}/exceptions", response_model=ExceptionReport)
+def scoreboard_exceptions(run_id: str, session: SessionDep) -> ExceptionReport:
+    if session.get(BatchRun, run_id) is None:
+        raise HTTPException(status_code=404, detail="batch run not found")
+    return exception_report(session, run_id)

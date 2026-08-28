@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { ArrowIcon, CoinsIcon, PulseIcon, ShieldIcon } from "@/components/icons";
 import { EmptyState, Shell } from "@/components/shell";
-import { ApiError, getLatestEvals, getLatestScoreboard } from "@/lib/api";
+import { ApiError, getExceptionReport, getLatestEvals, getLatestScoreboard } from "@/lib/api";
 import { duration, label, money, percent, shortId } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -17,6 +17,7 @@ export default async function ScoreboardPage() {
     return <Shell active="overview"><EmptyState title="No scoreboard yet" detail={detail} /></Shell>;
   }
   const evaluations = await getLatestEvals().catch(() => null);
+  const exceptions = await getExceptionReport(scoreboard.run_id).catch(() => null);
   const leakEntries = Object.entries(scoreboard.cases_by_leak_type).sort((a, b) => b[1] - a[1]);
   const largestLeak = Math.max(...leakEntries.map(([, count]) => count), 1);
   const costs = scoreboard.intervention_cost_paise + scoreboard.llm_cost_paise;
@@ -98,6 +99,31 @@ export default async function ScoreboardPage() {
               <div><strong>{percent(scoreboard.opt_out_rate)}</strong><span>Opt-out rate</span><small>contacted users</small></div>
             </div>
           </article>
+        </section>
+
+        <section className="panel exception-panel">
+          <div className="panel-heading">
+            <div><p className="eyebrow">Nothing hidden</p><h2>Exception list</h2></div>
+            <span>{exceptions?.total_cases ?? 0} non-recovered cases</span>
+          </div>
+          {exceptions?.groups.length ? (
+            <div className="exception-table-wrap">
+              <table className="exception-table">
+                <thead><tr><th>Reason</th><th>Why it remains here</th><th>Cases</th><th>At risk</th></tr></thead>
+                <tbody>
+                  {exceptions.groups.map((group) => (
+                    <tr key={group.reason}>
+                      <td><strong>{label(group.reason)}</strong></td>
+                      <td>{group.detail}</td>
+                      <td>{group.cases.toLocaleString("en-IN")}</td>
+                      <td>{money(group.amount_at_risk_paise)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : <p className="exception-empty">No unresolved or non-recovered cases in this batch.</p>}
+          <p className="exception-footnote">The API retains every underlying case ID; this table groups them only for review.</p>
         </section>
 
         <section className="bottom-grid">

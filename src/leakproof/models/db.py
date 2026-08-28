@@ -7,6 +7,7 @@ from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -26,6 +27,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from leakproof.db import Base
+from leakproof.demo.contracts import DemoSessionState
 from leakproof.models.domain import Arm, CaseOutcome, CaseState, LeakType
 
 BIGINT_PK = BigInteger().with_variant(Integer, "sqlite")
@@ -270,6 +272,7 @@ class LLMCall(Base):
 
     id: Mapped[int] = mapped_column(BIGINT_PK, primary_key=True, autoincrement=True)
     case_id: Mapped[str | None] = mapped_column(ForeignKey("cases.id"))
+    batch_run_id: Mapped[str | None] = mapped_column(ForeignKey("batch_runs.id"))
     purpose: Mapped[str] = mapped_column(String, nullable=False)
     model: Mapped[str] = mapped_column(String, nullable=False)
     prompt_version: Mapped[str] = mapped_column(String, nullable=False)
@@ -314,3 +317,136 @@ class WebhookEvent(Base):
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     processing_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_error: Mapped[str | None] = mapped_column(Text)
+
+
+class DemoSession(Base):
+    __tablename__ = "demo_sessions"
+    __table_args__ = (
+        UniqueConstraint("razorpay_order_id", name="uq_demo_sessions_razorpay_order"),
+        Index("ix_demo_sessions_merchant_state", "merchant_id", "state"),
+        Index("ix_demo_sessions_expires", "expires_at"),
+        Index("ix_demo_sessions_recipient_hash", "recipient_hash"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    merchant_id: Mapped[str] = mapped_column(ForeignKey("merchants.id"), nullable=False)
+    customer_id: Mapped[str] = mapped_column(ForeignKey("customers.id"), nullable=False)
+    razorpay_order_id: Mapped[str] = mapped_column(String, nullable=False)
+    amount_paise: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    state: Mapped[str] = mapped_column(
+        SAEnum(DemoSessionState, name="demo_session_state"),
+        default=DemoSessionState.CREATED,
+        nullable=False,
+    )
+    recipient_ciphertext: Mapped[str | None] = mapped_column(Text)
+    recipient_hash: Mapped[str | None] = mapped_column(String(64))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class CheckoutEvent(Base):
+    __tablename__ = "checkout_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id", "client_event_id", name="uq_checkout_events_session_client"
+        ),
+        Index("ix_checkout_events_session_received", "session_id", "received_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BIGINT_PK, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("demo_sessions.id"), nullable=False)
+    client_event_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    event_metadata: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", JSON_TYPE, default=dict, nullable=False
+    )
+
+
+class ProviderCall(Base):
+    __tablename__ = "provider_calls"
+    __table_args__ = (
+        Index("ix_provider_calls_session", "session_id", "created_at"),
+        Index("ix_provider_calls_case", "case_id", "created_at"),
+        Index("ix_provider_calls_provider_status", "provider", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(BIGINT_PK, primary_key=True, autoincrement=True)
+    session_id: Mapped[str | None] = mapped_column(ForeignKey("demo_sessions.id"))
+    case_id: Mapped[str | None] = mapped_column(ForeignKey("cases.id"))
+    action_id: Mapped[str | None] = mapped_column(ForeignKey("actions.id"))
+    provider: Mapped[str] = mapped_column(String(40), nullable=False)
+    operation: Mapped[str] = mapped_column(String(80), nullable=False)
+    request_id: Mapped[str | None] = mapped_column(String(255))
+    safe_response_metadata: Mapped[dict[str, Any]] = mapped_column(
+        JSON_TYPE, default=dict, nullable=False
+    )
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    attempt_number: Mapped[int] = mapped_column(SmallInteger, default=1, nullable=False)
+    status: Mapped[str] = mapped_column(String(40), nullable=False)
+    error_class: Mapped[str | None] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class EmailDelivery(Base):
+    __tablename__ = "email_deliveries"
+    __table_args__ = (
+        UniqueConstraint("action_id", name="uq_email_deliveries_action"),
+        UniqueConstraint("provider_email_id", name="uq_email_deliveries_provider_email"),
+        Index("ix_email_deliveries_recipient_created", "recipient_hash", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BIGINT_PK, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("demo_sessions.id"), nullable=False)
+    case_id: Mapped[str] = mapped_column(ForeignKey("cases.id"), nullable=False)
+    action_id: Mapped[str] = mapped_column(ForeignKey("actions.id"), nullable=False)
+    provider_email_id: Mapped[str | None] = mapped_column(String(128))
+    recipient_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(40), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class EmailDeliveryEvent(Base):
+    __tablename__ = "email_delivery_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider_email_id", "provider_event_id", name="uq_email_delivery_provider_event"
+        ),
+        Index("ix_email_delivery_events_email_created", "provider_email_id", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BIGINT_PK, primary_key=True, autoincrement=True)
+    provider_email_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    provider_event_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    safe_payload: Mapped[dict[str, Any]] = mapped_column(JSON_TYPE, default=dict, nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CaseInsightRecord(Base):
+    __tablename__ = "case_insights"
+    __table_args__ = (
+        CheckConstraint("confidence >= 0 AND confidence <= 1", name="ck_case_insight_confidence"),
+    )
+
+    case_id: Mapped[str] = mapped_column(ForeignKey("cases.id"), primary_key=True)
+    summary: Mapped[str | None] = mapped_column(String(500))
+    probable_cause: Mapped[str | None] = mapped_column(String(500))
+    evidence: Mapped[list[str]] = mapped_column(JSON_TYPE, default=list, nullable=False)
+    recommended_next_step: Mapped[str | None] = mapped_column(String(500))
+    confidence: Mapped[float | None] = mapped_column(Numeric(4, 3))
+    status: Mapped[str] = mapped_column(String(40), nullable=False)
+    fallback_reason: Mapped[str | None] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )

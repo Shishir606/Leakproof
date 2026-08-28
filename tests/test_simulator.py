@@ -40,6 +40,15 @@ def test_fixed_seed_generates_identical_artifacts_and_another_seed_changes_them(
     assert repeated.fingerprint() == dataset.fingerprint()
     assert alternate.fingerprint() != dataset.fingerprint()
     assert alternate.run_id != dataset.run_id
+    assert dataset.simulator_schema_version == 2
+    assert dataset.run_id.startswith("sim_v2_")
+    first = dataset.signals[0]
+    assert first.assignment_key.startswith("merchant_sim_42_")
+    assert "v2" not in first.assignment_key
+    assert first.outcome_key.startswith("pf:simcust_42_")
+    normalized = first.normalized(dataset.run_id)
+    assert normalized.evidence["simulation"]["assignment_key"] == first.assignment_key
+    assert normalized.evidence["simulation"]["outcome_key"] == first.outcome_key
 
 
 def test_seed_generates_5000_customers_and_twelve_months_of_history(dataset):

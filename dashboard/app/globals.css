@@ -134,6 +134,16 @@ button, select, input { font: inherit; }
 .safety-grid span { font-size: 9px; font-weight: 700; }
 .safety-grid small { color: #8a909c; font-size: 8px; }
 
+.exception-panel { margin-top: 17px; }
+.exception-table-wrap { overflow-x: auto; }
+.exception-table { border-collapse: collapse; font-size: 10px; width: 100%; }
+.exception-table th { border-bottom: 1px solid var(--line); color: var(--muted); font-size: 8px; letter-spacing: 0.6px; padding: 0 12px 10px; text-align: left; text-transform: uppercase; }
+.exception-table td { border-bottom: 1px solid #eceef1; color: #5d6679; line-height: 1.45; padding: 12px; }
+.exception-table td:first-child { color: var(--ink); width: 190px; }
+.exception-table td:nth-last-child(-n + 2), .exception-table th:nth-last-child(-n + 2) { text-align: right; white-space: nowrap; }
+.exception-empty { color: var(--muted); font-size: 10px; margin: 0; }
+.exception-footnote { color: #9299a6; font-size: 8px; margin: 12px 0 0; }
+
 .bottom-grid { display: grid; gap: 17px; grid-template-columns: 1fr 1fr; margin-top: 17px; }
 .eval-card, .timeline-cta { border-radius: 13px; min-height: 165px; padding: 25px 28px; }
 .eval-card { align-items: center; background: #e7e5fb; display: flex; justify-content: space-between; }

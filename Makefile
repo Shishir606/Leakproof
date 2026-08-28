@@ -1,4 +1,4 @@
-.PHONY: install lint test test-august-27 test-august-28 test-august-29 test-august-30 test-august-31 test-september-1 test-september-2 test-september-3 evals dashboard build up down migrate demo-webhook verify-foundation seed tunnel
+.PHONY: install lint test test-august-27 test-august-28 test-august-29 test-api-august-29 test-august-30 test-august-31 test-september-1 test-september-2 test-september-3 test-september-4 evals dashboard batch build up down migrate demo-webhook verify-foundation seed tunnel
 
 install:
 	uv sync --extra dev
@@ -19,6 +19,9 @@ test-august-28:
 test-august-29:
 	uv run pytest tests/test_actuators.py
 
+test-api-august-29:
+	uv run pytest tests/test_api_contracts.py tests/test_config.py tests/test_webhooks.py
+
 test-august-30:
 	uv run pytest tests/test_tier2.py
 
@@ -35,6 +38,9 @@ test-september-2:
 
 test-september-3:
 	uv run pytest tests/test_voice.py
+
+test-september-4:
+	uv run pytest tests/test_batch.py
 
 evals:
 	LEAKPROOF_DATABASE_URL=postgresql+psycopg://leakproof:leakproof@localhost:55432/leakproof uv run python scripts/run_evals.py
@@ -69,3 +75,6 @@ verify-foundation:
 
 seed:
 	LEAKPROOF_DATABASE_URL=postgresql+psycopg://leakproof:leakproof@localhost:55432/leakproof uv run python scripts/seed_simulator.py
+
+batch:
+	LEAKPROOF_DATABASE_URL=postgresql+psycopg://leakproof:leakproof@localhost:55432/leakproof uv run python scripts/run_batch.py

@@ -1,4 +1,4 @@
-import type { CaseDetail, CaseList, LatestEvals, Scoreboard } from "./types";
+import type { CaseDetail, CaseList, ExceptionReport, LatestEvals, Scoreboard } from "./types";
 
 const API_BASE_URL = (process.env.API_BASE_URL ?? "http://localhost:8000").replace(/\/$/, "");
 
@@ -28,6 +28,9 @@ async function apiGet<T>(path: string): Promise<T> {
 export const getLatestScoreboard = () => apiGet<Scoreboard>("/scoreboard/latest");
 
 export const getLatestEvals = () => apiGet<LatestEvals>("/evals/latest");
+
+export const getExceptionReport = (runId: string) =>
+  apiGet<ExceptionReport>(`/scoreboard/${encodeURIComponent(runId)}/exceptions`);
 
 export function getCases(filters: {
   state?: string;

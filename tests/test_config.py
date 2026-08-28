@@ -1,4 +1,4 @@
-from leakproof.config import get_measurement_config, get_policy_config
+from leakproof.config import get_measurement_config, get_policy_config, get_settings
 
 
 def test_all_foundation_configuration_is_typed_and_loads():
@@ -34,3 +34,7 @@ def test_all_foundation_configuration_is_typed_and_loads():
     assert measurement.holdout.stratify_by == ["leak_type", "amount_band"]
     assert measurement.attribution.windows_days["PAYMENT_FAILURE"] == 7
     assert measurement.attribution.windows_days["INVOICE_OVERDUE"] == 21
+
+
+def test_simulation_remains_the_safe_default():
+    assert get_settings().mode == "simulation"

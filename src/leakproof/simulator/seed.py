@@ -109,6 +109,7 @@ def persist_dataset(session: Session, dataset: SimulationDataset) -> PersistedSi
                     existing.customer_id,
                     signal.leak_type,
                     signal.amount_at_risk,
+                    (signal.evidence.get("simulation") or {}).get("assignment_key"),
                 )
                 existing.arm = assignment.arm.value
                 append_event(

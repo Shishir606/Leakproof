@@ -1,0 +1,107 @@
+{
+  "case": {
+    "id": "case_01a048c61cb92064283f67c5",
+    "merchant_id": "merchant_sim_v2_42_d1c5ff8a",
+    "customer_id": "simcust_v2_42_d1c5ff8a_00446",
+    "leak_type": "PAYMENT_FAILURE",
+    "entity_type": "payment",
+    "entity_id": "pay_sim_v2_42_d1c5ff8a_00046",
+    "dedupe_key": "pf:simcust_v2_42_d1c5ff8a_00446:order_sim_v2_42_d1c5ff8a_00046",
+    "batch_run_id": "sim_v2_42_d1c5ff8a",
+    "amount_band": "LOW",
+    "amount_at_risk": 74164,
+    "currency": "INR",
+    "state": "SUPPRESSED",
+    "arm": "TREATMENT",
+    "detected_at": "2026-08-26T10:39:08Z",
+    "attribution_until": "2026-09-02T10:39:08Z"
+  },
+  "events": [
+    {
+      "seq": 1,
+      "kind": "DETECTED",
+      "payload": {
+        "leak_type": "PAYMENT_FAILURE",
+        "entity_id": "pay_sim_v2_42_d1c5ff8a_00046",
+        "entity_root_id": "order_sim_v2_42_d1c5ff8a_00046",
+        "amount_at_risk": 74164,
+        "currency": "INR",
+        "evidence": {
+          "issuer": "HDFC",
+          "method": "netbanking",
+          "error_source": "bank",
+          "error_step": "payment_authorization",
+          "error_reason": "gateway_technical_error",
+          "cohort_failure_rate": 0.9,
+          "baseline_failure_rate": 0.043,
+          "incident_duration_minutes": 40,
+          "failure_class": "TRANSIENT",
+          "simulation": {
+            "synthetic": true,
+            "run_id": "sim_v2_42_d1c5ff8a",
+            "scenario": "issuer_outage",
+            "assignment_key": "merchant_sim_42_d1c5ff8a:simcust_42_d1c5ff8a_00446",
+            "outcome_key": "pf:simcust_42_d1c5ff8a_00446:order_sim_42_d1c5ff8a_00046",
+            "organic_recovery": {
+              "baseline_rate": 0.55,
+              "will_recover_without_intervention": false,
+              "delay_days": null,
+              "recovery_at": null
+            }
+          }
+        },
+        "case": {
+          "id": "case_01a048c61cb92064283f67c5",
+          "merchant_id": "merchant_sim_v2_42_d1c5ff8a",
+          "customer_id": "simcust_v2_42_d1c5ff8a_00446",
+          "leak_type": "PAYMENT_FAILURE",
+          "entity_type": "payment",
+          "entity_id": "pay_sim_v2_42_d1c5ff8a_00046",
+          "dedupe_key": "pf:simcust_v2_42_d1c5ff8a_00446:order_sim_v2_42_d1c5ff8a_00046",
+          "batch_run_id": "sim_v2_42_d1c5ff8a",
+          "amount_band": "LOW",
+          "amount_at_risk": 74164,
+          "currency": "INR",
+          "state": "DETECTED",
+          "arm": "TREATMENT",
+          "detected_at": "2026-08-26T10:39:08+00:00",
+          "attribution_until": "2026-09-02T10:39:08+00:00"
+        }
+      },
+      "actor": "sensor",
+      "occurred_at": "2026-08-28T14:28:58.170448Z"
+    },
+    {
+      "seq": 2,
+      "kind": "ASSIGNED",
+      "payload": {
+        "arm": "TREATMENT",
+        "bucket": 7577,
+        "random_value": 0.7577,
+        "holdout_fraction": 0.1,
+        "seed": 42,
+        "stratum": "PAYMENT_FAILURE:LOW",
+        "stratify_by": ["leak_type", "amount_band"]
+      },
+      "actor": "holdout_allocator",
+      "occurred_at": "2026-08-28T14:28:58.171061Z"
+    },
+    {
+      "seq": 3,
+      "kind": "SUPPRESSED",
+      "payload": {
+        "suppression_id": 2,
+        "pattern": "issuer_outage",
+        "scope": {"issuer": "HDFC", "method": "netbanking"},
+        "evidence": "47/52 failures vs baseline 4.3%; 47/47 bank/gateway errors",
+        "confidence": 0.95,
+        "expires_at": "2026-08-26T11:39:09+00:00",
+        "cancelled_action_ids": []
+      },
+      "actor": "tier2_circuit_breaker",
+      "occurred_at": "2026-08-28T14:28:59.790053Z"
+    }
+  ],
+  "replayed_state": "SUPPRESSED",
+  "projection_matches": true
+}

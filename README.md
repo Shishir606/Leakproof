@@ -2,7 +2,7 @@
 
 **One recovery spine for five revenue-leak surfaces.**
 
-This repository contains the August 25 foundation through the September 3 bounded voice slice.
+This repository contains the August 25 foundation through the September 4 reproducible full-batch slice.
 A FastAPI receiver verifies Razorpay HMAC signatures, commits each raw webhook
 to a durable Postgres inbox, deduplicates by provider event ID, and only then asks a Celery worker
 to normalize it. A fixed-seed simulator sends all five revenue-leak types through that same case
@@ -28,7 +28,41 @@ FastAPI ──commit──> Postgres webhook inbox                    │
                                       scoped circuit breaker
 ```
 
-## Run the August 25–September 3 slices
+## September 4 headline scoreboard
+
+The committed seed-42 simulation now runs all 787 cases through diagnosis, holdout assignment,
+bounded planning, pre-flight gating, deterministic actuators, outcome verification, and the
+exception ledger. These are synthetic measurements from the assumptions in
+`simulator/params.yaml`, not production revenue claims.
+
+| Measure | Seed-42 result |
+|---|---:|
+| Treatment recovery rate | 22.61% (161 / 712) |
+| Holdout recovery rate | 14.67% (11 / 75) |
+| Measured lift | **+7.95 pp** |
+| Gross treatment recovery | ₹99,26,100.51 |
+| Stratified organic counterfactual | ₹71,05,521.53 |
+| Incremental recovery | **₹28,20,578.98** |
+| Intervention + model cost | ₹31.22 |
+| Net value created | **₹28,20,547.76** |
+| False chases | **0** |
+| Scoped issuer-outage suppressions | **47 / 47** |
+| Prompt-injection bypasses | **0 / 64** |
+
+The result is deterministic across clean databases: outcome draws use the committed case dedupe
+key, action type, step number, and seed rather than generated database IDs. The amount estimator is
+the pre-declared stratified holdout amount-rate estimator. The complete non-recovered population is
+published through the exception endpoint and grouped on the dashboard; no case is dropped from the
+report.
+
+Synthetic identities include a simulator schema version. A newer build therefore creates a fresh,
+auditable run namespace instead of silently inheriting mutable projections from an older seeded
+volume.
+
+An immutable seed-42 circuit-breaker audit export is committed at
+`samples/seed-42-audit.json` for review without a running stack.
+
+## Run the August 25–September 4 slices
 
 Docker Desktop must be running.
 
@@ -47,6 +81,8 @@ make test-august-31
 make test-september-1
 make test-september-2
 make test-september-3
+make test-september-4
+make batch
 make evals
 ```
 
@@ -314,6 +350,40 @@ Run the September 3 acceptance slice with:
 make test-september-3
 ```
 
+## September 4: reproducible full batch and honest exception list
+
+`make batch` executes the complete seed-42 dataset through the same case, event, diagnosis, policy,
+gate, actuator, attribution, and scoreboard code paths used by the API. The issuer outage is scanned
+before individual recovery work and opens one HDFC/netbanking circuit breaker. Outcome draws are
+fixed by stable business keys, organic and intervention recoveries are materialized as normal paid
+signals, and exhausted attribution windows close explicitly as `LOST`. Re-running the batch adds no
+events, actions, contacts, attributions, suppressions, or provider receipts.
+
+`POST /batch/run` provides the same synchronous simulation entry point. The scoreboard attributes
+aggregate Tier 2 model cost to its batch, so net value includes both per-case intervention costs and
+cohort reasoning. `GET /costs?run_id=...` exposes the corresponding ledger slice.
+
+The dashboard now includes a real exception table grouped by reason. The backing
+`GET /scoreboard/{run_id}/exceptions` response includes every individual non-recovered case ID plus
+its leak type, state, outcome, amount at risk, and reason. Seed 42 publishes these groups:
+
+| Exception reason | Cases | Interpretation |
+|---|---:|---|
+| Recovery not observed | 435 | No verified recovery inside the declared window |
+| Human review | 95 | Protected, high-value, or sensitive action needs a second key |
+| Merchant remediation | 39 | Merchant configuration must be fixed first |
+| Cohort suppression | 24 | Still non-recovered after safe suppression; all 47 were protected |
+| Protected customer | 10 | Automation prohibited; human-only policy |
+| Contact prohibited | 7 | Existing DNC status blocked intervention |
+| Customer opt-out | 5 | Opt-out recorded and later contact cancelled |
+
+Run the September 4 acceptance slice with:
+
+```bash
+make test-september-4
+make batch
+```
+
 Run the acceptance tests locally:
 
 ```bash
@@ -358,10 +428,15 @@ The tests demonstrate:
 - provider turn redelivery creates one voice turn and one promise-to-pay record;
 - opt-out language ends the call immediately, records DNC, and cancels later contact;
 - unclear voice input hands off after at most two customer turns.
+- the seed-42 full batch is terminal, reproducible, measured, and idempotent;
+- one scoped issuer breaker suppresses all 47 injected outage cases before action;
+- every non-recovered case appears in the grouped and case-level exception report;
+- aggregate model cost is attributed to the batch and included in net value.
 
 ## API
 
 - `POST /webhooks/razorpay` — HMAC verification, durable inbox, dedupe, async enqueue
+- `POST /batch/run` — execute or idempotently replay the full synthetic batch
 - `GET /cases?state=&leak_type=` — filterable case index for the timeline
 - `GET /cases/{case_id}` — case, diagnosis, action ladder, attribution, and audit timeline
 - `POST /actions/{action_id}/voice/turns` — idempotent simulated voice turn and bounded reply
@@ -372,6 +447,7 @@ The tests demonstrate:
 - `GET /costs` — LLM token, cost, latency, and schema-success rollup
 - `GET /scoreboard/{run_id}` — holdout lift, incremental recovery, cost, and safety metrics
 - `GET /scoreboard/latest` — most recent measured batch for the dashboard
+- `GET /scoreboard/{run_id}/exceptions` — grouped reasons plus every non-recovered case
 - `GET /evals/latest` — latest cohort and injection metrics with pass/fail gates
 - `GET /health/live` and `GET /health/ready` — process and database health
 
@@ -379,6 +455,9 @@ Raw money values are paise (`BIGINT`) and timestamps are timezone-aware. Actuato
 structured cohort transport are deterministic simulations in the default mode.
 
 ## Current boundary
+
+The approved free-first live integration direction is documented in
+[`API_INTEGRATION_PLAN.md`](API_INTEGRATION_PLAN.md).
 
 The simulator feeds normalized synthetic signals directly into the shared case/event spine. The
 scheduled checkout, invoice, subscription, and 24-hour reconciliation entry points and their
@@ -388,5 +467,6 @@ gating, simulated interventions, payment-success cancellation, aggregate inciden
 scope-specific suppression, and LLM accounting are built. Live provider calls and full recovery
 verification outside the Razorpay success-webhook path remain reserved for later build slices.
 Attribution, holdout enforcement, the scoreboard API, the reproducible September 1 evaluation
-harness, the September 2 Scoreboard and Case Timeline, and the September 3 bounded simulated voice
-and promise-to-pay capture are built. Live voice transport is not.
+harness, the September 2 Scoreboard and Case Timeline, the September 3 bounded simulated voice,
+and the September 4 full-batch outcome and exception workflow are built. Live voice transport is
+not.

@@ -23,6 +23,7 @@ from leakproof.simulator.scenarios import (
 )
 
 PARAMETERS_PATH = Path("simulator/params.yaml")
+SIMULATOR_SCHEMA_VERSION = 2
 METHODS = ("upi", "card", "netbanking", "wallet", "emandate")
 METHOD_WEIGHTS = (0.42, 0.30, 0.14, 0.09, 0.05)
 ISSUERS = ("HDFC", "ICICI", "SBI", "AXIS", "KOTAK")
@@ -71,6 +72,8 @@ class SimulatedSignal(BaseModel):
     currency: str
     failure_class: str
     scenario: str
+    assignment_key: str
+    outcome_key: str
     evidence: dict[str, Any]
     occurred_at: datetime
     organic_recovery: OrganicOutcome
@@ -83,6 +86,8 @@ class SimulatedSignal(BaseModel):
                 "synthetic": True,
                 "run_id": simulation_run_id,
                 "scenario": self.scenario,
+                "assignment_key": self.assignment_key,
+                "outcome_key": self.outcome_key,
                 "organic_recovery": self.organic_recovery.model_dump(mode="json"),
             },
         }
@@ -104,6 +109,7 @@ class SimulationDataset(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     synthetic: bool = True
+    simulator_schema_version: int = SIMULATOR_SCHEMA_VERSION
     run_id: str
     seed: int
     as_of: datetime
@@ -132,6 +138,7 @@ class SimulationDataset(BaseModel):
         )
         return {
             "synthetic": True,
+            "simulator_schema_version": self.simulator_schema_version,
             "run_id": self.run_id,
             "seed": self.seed,
             "as_of": self.as_of.isoformat(),
@@ -287,6 +294,7 @@ def _materialize_signal(
     spec: ScenarioSignal,
     merchant_id: str,
     run_suffix: str,
+    stable_suffix: str,
     sequence: int,
     rng: Random,
 ) -> SimulatedSignal:
@@ -303,6 +311,23 @@ def _materialize_signal(
         if spec.leak_type == LeakType.PAYMENT_FAILURE
         else None
     )
+    stable_customer_id = f"simcust_{stable_suffix}_{spec.customer_index:05d}"
+    stable_entity_id = f"{entity_prefix}_sim_{stable_suffix}_{sequence:05d}"
+    stable_root_id = (
+        f"order_sim_{stable_suffix}_{sequence:05d}"
+        if spec.leak_type == LeakType.PAYMENT_FAILURE
+        else None
+    )
+    if spec.leak_type == LeakType.PAYMENT_FAILURE:
+        outcome_key = f"pf:{stable_customer_id}:{stable_root_id}"
+    elif spec.leak_type == LeakType.CHECKOUT_ABANDON:
+        outcome_key = f"ca:{stable_entity_id}"
+    elif spec.leak_type == LeakType.SUBSCRIPTION_HALT:
+        outcome_key = f"sh:{stable_entity_id}:{spec.evidence.get('cycle_number', 'unknown')}"
+    elif spec.leak_type == LeakType.INVOICE_OVERDUE:
+        outcome_key = f"io:{stable_entity_id}"
+    else:
+        outcome_key = f"mb:{stable_entity_id}"
     evidence = dict(spec.evidence)
     if spec.leak_type == LeakType.INVOICE_OVERDUE:
         evidence.update(
@@ -326,6 +351,8 @@ def _materialize_signal(
         currency="INR",
         failure_class=spec.failure_class,
         scenario=spec.scenario,
+        assignment_key=f"merchant_sim_{stable_suffix}:{stable_customer_id}",
+        outcome_key=outcome_key,
         evidence=evidence,
         occurred_at=spec.occurred_at,
         organic_recovery=_organic_outcome(
@@ -352,7 +379,12 @@ def generate_dataset(
         separators=(",", ":"),
     ).encode()
     parameter_hash = hashlib.sha256(serialized_parameters).hexdigest()
-    run_suffix = f"{parameters.simulation.seed}_{parameter_hash[:8]}"
+    # Version the synthetic identity namespace as well as the parameter hash. This keeps a
+    # persistent database from silently reusing cases created by an older simulator contract.
+    stable_suffix = f"{parameters.simulation.seed}_{parameter_hash[:8]}"
+    run_suffix = (
+        f"v{SIMULATOR_SCHEMA_VERSION}_{parameters.simulation.seed}_{parameter_hash[:8]}"
+    )
     run_id = f"sim_{run_suffix}"
     merchant_id = f"merchant_{run_id}"
     rng = Random(parameters.simulation.seed)
@@ -373,6 +405,7 @@ def generate_dataset(
             spec=spec,
             merchant_id=merchant_id,
             run_suffix=run_suffix,
+            stable_suffix=stable_suffix,
             sequence=sequence,
             rng=rng,
         )

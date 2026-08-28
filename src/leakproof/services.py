@@ -79,12 +79,14 @@ def assigned_arm(
     customer_id: str,
     leak_type: LeakType,
     amount_at_risk: int,
+    assignment_key: str | None = None,
 ) -> ArmAssignment:
     """Deterministically randomize within leak-type and amount-band strata."""
     holdout = get_measurement_config().holdout
     band = amount_band(amount_at_risk)
     stratum = f"{leak_type.value}:{band}"
-    value = f"{merchant_id}:{customer_id}:{stratum}:{holdout.seed}".encode()
+    identity = assignment_key or f"{merchant_id}:{customer_id}"
+    value = f"{identity}:{stratum}:{holdout.seed}".encode()
     bucket = int.from_bytes(hashlib.sha256(value).digest()[:8], "big") % 10_000
     threshold = round(holdout.fraction * 10_000)
     return ArmAssignment(
@@ -142,6 +144,7 @@ def record_signal(session: Session, signal: NormalizedSignal) -> tuple[RecoveryC
             signal.customer_id,
             signal.leak_type,
             signal.amount_at_risk,
+            (signal.evidence.get("simulation") or {}).get("assignment_key"),
         )
         simulation = signal.evidence.get("simulation") or {}
         case = RecoveryCase(

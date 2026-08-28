@@ -218,13 +218,18 @@ class StructuredLLMClient:
         payload: dict[str, Any],
         schema: type[OutputModel],
         case_id: str | None = None,
+        batch_run_id: str | None = None,
     ) -> tuple[OutputModel, LLMCall]:
         config = get_policy_config()
         route = config.models.routes[purpose]
-        spent = int(session.scalar(select(func.coalesce(func.sum(LLMCall.cost_paise), 0))) or 0)
+        spent_query = select(func.coalesce(func.sum(LLMCall.cost_paise), 0))
+        if batch_run_id is not None:
+            spent_query = spent_query.where(LLMCall.batch_run_id == batch_run_id)
+        spent = int(session.scalar(spent_query) or 0)
         if spent >= config.models.budgets.per_batch_paise:
             record = LLMCall(
                 case_id=case_id,
+                batch_run_id=batch_run_id,
                 purpose=purpose,
                 model="budget_guard",
                 prompt_version=PROMPT_VERSION,
@@ -280,6 +285,7 @@ class StructuredLLMClient:
 
         record = LLMCall(
             case_id=case_id,
+            batch_run_id=batch_run_id,
             purpose=purpose,
             model=used_model,
             prompt_version=PROMPT_VERSION,
@@ -516,6 +522,7 @@ def run_cohort_scan(
     window_from: datetime,
     window_to: datetime,
     client: StructuredLLMClient | None = None,
+    batch_run_id: str | None = None,
 ) -> CohortRunResult:
     scan = aggregate_cohort_window(
         session,
@@ -533,6 +540,7 @@ def run_cohort_scan(
             purpose="cohort_scan",
             payload=candidate_scan.model_dump(mode="json", by_alias=True),
             schema=CohortScanOutput,
+            batch_run_id=batch_run_id,
         )
     except StructuredOutputError:
         session.commit()

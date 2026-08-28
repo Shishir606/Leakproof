@@ -4,9 +4,10 @@ from datetime import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,10 +17,69 @@ class Settings(BaseSettings):
     environment: Literal["development", "test", "production"] = "development"
     database_url: str = "postgresql+psycopg://leakproof:leakproof@localhost:5432/leakproof"
     redis_url: str = "redis://localhost:6379/0"
-    razorpay_webhook_secret: str = "development-secret"
     default_merchant_id: str = "merchant_demo"
-    mode: Literal["simulation", "live"] = "simulation"
+    mode: Literal["simulation", "live_demo"] = "simulation"
     config_dir: Path = Path("config")
+
+    public_base_url: str = ""
+    recovery_token_secret: str = ""
+    razorpay_key_id: str = ""
+    razorpay_key_secret: str = ""
+    razorpay_webhook_secret: str = ""
+    openai_api_key: str = ""
+    openai_model: Literal["gpt-5.6-luna"] = "gpt-5.6-luna"
+    resend_api_key: str = ""
+    resend_webhook_secret: str = ""
+    resend_from_email: str = ""
+    demo_email_allowlist: str = ""
+    resend_daily_limit: int = Field(default=100, gt=0)
+    resend_monthly_limit: int = Field(default=3_000, gt=0)
+
+    @property
+    def allowed_demo_emails(self) -> frozenset[str]:
+        return frozenset(
+            email.strip().casefold()
+            for email in self.demo_email_allowlist.split(",")
+            if email.strip()
+        )
+
+    @model_validator(mode="after")
+    def validate_live_demo_readiness(self) -> Settings:
+        if self.mode == "simulation":
+            return self
+
+        missing = [
+            name
+            for name in (
+                "public_base_url",
+                "recovery_token_secret",
+                "razorpay_key_id",
+                "razorpay_key_secret",
+                "razorpay_webhook_secret",
+                "openai_api_key",
+                "resend_api_key",
+                "resend_webhook_secret",
+                "resend_from_email",
+            )
+            if not getattr(self, name).strip()
+        ]
+        if missing:
+            raise ValueError(
+                "live_demo configuration is incomplete: " + ", ".join(sorted(missing))
+            )
+
+        parsed_url = urlsplit(self.public_base_url)
+        if parsed_url.scheme != "https" or not parsed_url.netloc:
+            raise ValueError("live_demo requires an HTTPS LEAKPROOF_PUBLIC_BASE_URL")
+        if not self.razorpay_key_id.startswith("rzp_test_"):
+            raise ValueError("live_demo requires a Razorpay test-mode key beginning with rzp_test_")
+        if len(self.recovery_token_secret) < 32:
+            raise ValueError("LEAKPROOF_RECOVERY_TOKEN_SECRET must contain at least 32 characters")
+        if "@" not in self.resend_from_email:
+            raise ValueError("LEAKPROOF_RESEND_FROM_EMAIL must be an email address")
+        if self.resend_monthly_limit < self.resend_daily_limit:
+            raise ValueError("monthly Resend limit must be greater than or equal to daily limit")
+        return self
 
 
 class ActionConfig(BaseModel):

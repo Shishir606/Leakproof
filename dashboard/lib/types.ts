@@ -126,3 +126,24 @@ export type LatestEvals = {
     ran_at: string;
   }>;
 };
+
+export type ExceptionReport = {
+  run_id: string;
+  total_cases: number;
+  total_amount_at_risk_paise: number;
+  groups: Array<{
+    reason: string;
+    detail: string;
+    cases: number;
+    amount_at_risk_paise: number;
+  }>;
+  items: Array<{
+    case_id: string;
+    reason: string;
+    detail: string;
+    leak_type: string;
+    state: string;
+    outcome: string | null;
+    amount_at_risk_paise: number;
+  }>;
+};

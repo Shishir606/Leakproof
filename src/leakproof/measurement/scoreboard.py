@@ -4,7 +4,7 @@ from collections import defaultdict
 from datetime import UTC, datetime
 
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from leakproof.models.db import (
@@ -12,6 +12,7 @@ from leakproof.models.db import (
     BatchRun,
     Contact,
     Customer,
+    Event,
     LLMCall,
     Merchant,
     RecoveryAttribution,
@@ -146,7 +147,10 @@ def compute_scoreboard(session: Session, run_id: str) -> Scoreboard:
     llm_cost = int(
         session.scalar(
             select(func.coalesce(func.sum(LLMCall.cost_paise), 0)).where(
-                LLMCall.case_id.in_(case_ids)
+                or_(
+                    LLMCall.case_id.in_(case_ids),
+                    LLMCall.batch_run_id == run_id,
+                )
             )
         )
         or 0
@@ -164,6 +168,11 @@ def compute_scoreboard(session: Session, run_id: str) -> Scoreboard:
         or 0
     ) if contacted_customer_ids else 0
     case_by_id = {case.id: case for case in cases}
+    events_by_case: dict[str, list[Event]] = defaultdict(list)
+    for event in session.scalars(
+        select(Event).where(Event.case_id.in_(case_ids)).order_by(Event.case_id, Event.seq)
+    ):
+        events_by_case[event.case_id].append(event)
     false_chases = sum(
         1
         for contact in contacts
@@ -220,25 +229,24 @@ def compute_scoreboard(session: Session, run_id: str) -> Scoreboard:
         ),
         false_chase_count=false_chases,
         suppressed_by_circuit_breaker=sum(
-            case.state == CaseState.SUPPRESSED.value
-            or case.outcome == CaseOutcome.SUPPRESSED.value
+            any(event.kind == "SUPPRESSED" for event in events_by_case[case.id])
             for case in cases
         ),
         declined_ev_non_positive=sum(
-            case.outcome == CaseOutcome.ABANDONED.value for case in cases
+            any(
+                event.kind == "CLOSED" and "is not positive" in str(event.payload)
+                for event in events_by_case[case.id]
+            )
+            for case in cases
         ),
         escalated_to_human=sum(
-            case.state == CaseState.ESCALATED.value
-            or case.outcome == CaseOutcome.HUMAN.value
+            any(event.kind == "ESCALATED" for event in events_by_case[case.id])
             for case in cases
         ),
         unresolved_exceptions=sum(
-            case.state
-            not in {
-                CaseState.CLOSED.value,
-                CaseState.SUPPRESSED.value,
-                CaseState.STOPPED.value,
-            }
+            case.outcome is None
+            and case.state
+            not in {CaseState.CLOSED.value, CaseState.SUPPRESSED.value, CaseState.STOPPED.value}
             for case in cases
         ),
     )
