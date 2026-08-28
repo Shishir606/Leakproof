@@ -80,13 +80,18 @@ def _registered_message(
     template_id = template_by_action.get(action.action_type)
     if template_id is None:
         return None
-    return TemplateRegistry().render(
-        template_id,
-        {
+    variables = (
+        {}
+        if action.action_type == "voice_hinglish"
+        else {
             "customer_ref": customer.id,
             "amount": f"INR {case.amount_at_risk / 100:,.2f}",
             "link": f"https://pay.example/{case.entity_id}",
-        },
+        }
+    )
+    return TemplateRegistry().render(
+        template_id,
+        variables,
         language="hinglish" if action.action_type == "voice_hinglish" else customer.locale,
     )
 

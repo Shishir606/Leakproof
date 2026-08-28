@@ -52,8 +52,80 @@
 - id: util_recovery_voice_v1
   channel: voice
   dlt_or_meta_ref: "internal:recovery-voice-v1"
-  variables: [customer_ref, amount, link]
+  variables: []
   tone: soft
   languages: [hinglish]
   content:
-    hinglish: "Namaste {customer_ref}, aapke {amount} payment ke baare mein madad ke liye call kiya hai."
+    hinglish: "Namaste. Yeh call quality aur audit ke liye record ho rahi hai. Kya main account holder se baat kar raha hoon?"
+
+- id: util_voice_identity_retry_v1
+  channel: voice
+  dlt_or_meta_ref: "internal:voice-identity-retry-v1"
+  variables: []
+  tone: soft
+  languages: [hinglish]
+  content:
+    hinglish: "Maaf kijiye, kya main account holder se baat kar raha hoon? Haan ya nahin kahiye."
+
+- id: util_voice_payment_options_v1
+  channel: voice
+  dlt_or_meta_ref: "internal:voice-payment-options-v1"
+  variables: [amount, link]
+  tone: soft
+  languages: [hinglish]
+  content:
+    hinglish: "Dhanyavaad. Aapka {amount} payment pending hai. Abhi pay karne ke liye secure link {link} hai. Baad mein pay karenge to kripya date batayein."
+
+- id: util_voice_date_retry_v1
+  channel: voice
+  dlt_or_meta_ref: "internal:voice-date-retry-v1"
+  variables: []
+  tone: soft
+  languages: [hinglish]
+  content:
+    hinglish: "Maaf kijiye, promise date samajh nahi aayi. Kripya agle tees dinon ki ek date batayein."
+
+- id: util_voice_promise_confirm_v1
+  channel: voice
+  dlt_or_meta_ref: "internal:voice-promise-confirm-v1"
+  variables: [promised_on]
+  tone: soft
+  languages: [hinglish]
+  content:
+    hinglish: "Theek hai, {promised_on} ke liye payment promise note kar liya hai. Dhanyavaad."
+
+- id: util_voice_link_confirm_v1
+  channel: voice
+  dlt_or_meta_ref: "internal:voice-link-confirm-v1"
+  variables: [link]
+  tone: soft
+  languages: [hinglish]
+  content:
+    hinglish: "Theek hai, secure payment link {link} bhej diya gaya hai. Dhanyavaad."
+
+- id: util_voice_stop_v1
+  channel: voice
+  dlt_or_meta_ref: "internal:voice-stop-v1"
+  variables: []
+  tone: soft
+  languages: [hinglish]
+  content:
+    hinglish: "Theek hai, call yahin band karte hain. Dhanyavaad."
+
+- id: util_voice_optout_v1
+  channel: voice
+  dlt_or_meta_ref: "internal:voice-optout-v1"
+  variables: []
+  tone: soft
+  languages: [hinglish]
+  content:
+    hinglish: "Aapki do-not-call request record kar li gayi hai. Aage call nahi kiya jayega."
+
+- id: util_voice_human_v1
+  channel: voice
+  dlt_or_meta_ref: "internal:voice-human-v1"
+  variables: []
+  tone: soft
+  languages: [hinglish]
+  content:
+    hinglish: "Main is request ko support team ke liye note kar raha hoon. Call yahin band karte hain."

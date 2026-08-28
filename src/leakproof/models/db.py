@@ -233,6 +233,9 @@ class Suppression(Base):
 
 class Promise(Base):
     __tablename__ = "promises"
+    __table_args__ = (
+        UniqueConstraint("case_id", "transcript_ref", name="uq_promises_case_transcript"),
+    )
 
     id: Mapped[int] = mapped_column(BIGINT_PK, primary_key=True, autoincrement=True)
     case_id: Mapped[str] = mapped_column(ForeignKey("cases.id"), nullable=False)
@@ -241,6 +244,25 @@ class Promise(Base):
     captured_via: Mapped[str] = mapped_column(String, nullable=False)
     kept: Mapped[bool | None] = mapped_column(Boolean)
     transcript_ref: Mapped[str | None] = mapped_column(String)
+
+
+class VoiceTurn(Base):
+    """One provider-delivered customer turn in a bounded voice conversation."""
+
+    __tablename__ = "voice_turns"
+    __table_args__ = (
+        UniqueConstraint("action_id", "turn_number", name="uq_voice_turn_action_number"),
+    )
+
+    provider_turn_id: Mapped[str] = mapped_column(String, primary_key=True)
+    action_id: Mapped[str] = mapped_column(ForeignKey("actions.id"), nullable=False)
+    case_id: Mapped[str] = mapped_column(ForeignKey("cases.id"), nullable=False)
+    turn_number: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    transcript: Mapped[str] = mapped_column(Text, nullable=False)
+    intent: Mapped[str] = mapped_column(String, nullable=False)
+    reply_template_id: Mapped[str] = mapped_column(String, nullable=False)
+    ended: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class LLMCall(Base):

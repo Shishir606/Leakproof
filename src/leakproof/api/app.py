@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Annotated
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request, status
@@ -22,6 +22,7 @@ from leakproof.models.db import (
     EvalRun,
     Event,
     LLMCall,
+    Promise,
     RecoveryAttribution,
     RecoveryCase,
     Suppression,
@@ -32,6 +33,7 @@ from leakproof.sensors.webhooks import (
     persist_webhook,
     verify_razorpay_signature,
 )
+from leakproof.voice import handle_voice_turn
 
 logger = logging.getLogger(__name__)
 
@@ -145,12 +147,44 @@ class AttributionView(BaseModel):
     paid_at: datetime
 
 
+class PromiseView(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: int
+    case_id: str
+    promised_on: date
+    amount_paise: int
+    captured_via: str
+    kept: bool | None
+    transcript_ref: str | None
+
+
+class VoiceTurnRequest(BaseModel):
+    provider_turn_id: str
+    transcript: str
+    occurred_at: datetime | None = None
+
+
+class VoiceTurnView(BaseModel):
+    action_id: str
+    case_id: str
+    provider_turn_id: str
+    turn_number: int
+    intent: str
+    reply_template_id: str
+    reply: str
+    ended: bool
+    promise_id: int | None
+    replayed: bool
+
+
 class CaseDetailView(BaseModel):
     case: CaseListItem
     replay: ReplayedCase
     diagnosis: DiagnosisView | None
     actions: list[ActionView]
     attribution: AttributionView | None
+    promises: list[PromiseView]
 
 
 def enqueue_webhook(webhook_id: int) -> None:
@@ -294,6 +328,13 @@ def case_detail(case_id: str, session: SessionDep) -> CaseDetailView:
     attribution = session.scalar(
         select(RecoveryAttribution).where(RecoveryAttribution.case_id == case_id)
     )
+    promises = list(
+        session.scalars(
+            select(Promise)
+            .where(Promise.case_id == case_id)
+            .order_by(Promise.promised_on, Promise.id)
+        )
+    )
     return CaseDetailView(
         case=CaseListItem(
             **CaseListItem.model_validate(
@@ -313,6 +354,39 @@ def case_detail(case_id: str, session: SessionDep) -> CaseDetailView:
             if attribution is not None
             else None
         ),
+        promises=[PromiseView.model_validate(item, from_attributes=True) for item in promises],
+    )
+
+
+@app.post("/actions/{action_id}/voice/turns", response_model=VoiceTurnView)
+def voice_turn(
+    action_id: str,
+    request: VoiceTurnRequest,
+    session: SessionDep,
+) -> VoiceTurnView:
+    try:
+        reply = handle_voice_turn(
+            session,
+            action_id,
+            provider_turn_id=request.provider_turn_id,
+            transcript=request.transcript,
+            occurred_at=request.occurred_at,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="action not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return VoiceTurnView(
+        action_id=reply.action_id,
+        case_id=reply.case_id,
+        provider_turn_id=reply.provider_turn_id,
+        turn_number=reply.turn_number,
+        intent=reply.intent,
+        reply_template_id=reply.message.template_id,
+        reply=reply.message.body,
+        ended=reply.ended,
+        promise_id=reply.promise_id,
+        replayed=reply.replayed,
     )
 
 

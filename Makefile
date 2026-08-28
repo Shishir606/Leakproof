@@ -1,4 +1,4 @@
-.PHONY: install lint test test-august-27 test-august-28 test-august-29 test-august-30 test-august-31 test-september-1 test-september-2 evals dashboard build up down migrate demo-webhook verify-foundation seed tunnel
+.PHONY: install lint test test-august-27 test-august-28 test-august-29 test-august-30 test-august-31 test-september-1 test-september-2 test-september-3 evals dashboard build up down migrate demo-webhook verify-foundation seed tunnel
 
 install:
 	uv sync --extra dev
@@ -32,6 +32,9 @@ test-september-2:
 	uv run pytest tests/test_dashboard_api.py
 	npm --prefix dashboard run check
 	npm --prefix dashboard run build
+
+test-september-3:
+	uv run pytest tests/test_voice.py
 
 evals:
 	LEAKPROOF_DATABASE_URL=postgresql+psycopg://leakproof:leakproof@localhost:55432/leakproof uv run python scripts/run_evals.py

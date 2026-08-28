@@ -2,7 +2,7 @@
 
 **One recovery spine for five revenue-leak surfaces.**
 
-This repository contains the August 25 foundation through the September 2 dashboard slice.
+This repository contains the August 25 foundation through the September 3 bounded voice slice.
 A FastAPI receiver verifies Razorpay HMAC signatures, commits each raw webhook
 to a durable Postgres inbox, deduplicates by provider event ID, and only then asks a Celery worker
 to normalize it. A fixed-seed simulator sends all five revenue-leak types through that same case
@@ -28,7 +28,7 @@ FastAPI ──commit──> Postgres webhook inbox                    │
                                       scoped circuit breaker
 ```
 
-## Run the August 25–September 2 slices
+## Run the August 25–September 3 slices
 
 Docker Desktop must be running.
 
@@ -46,6 +46,7 @@ make test-august-30
 make test-august-31
 make test-september-1
 make test-september-2
+make test-september-3
 make evals
 ```
 
@@ -289,6 +290,30 @@ API on port 8000 and run `make dashboard`. Run the September 2 acceptance slice 
 make test-september-2
 ```
 
+## September 3: bounded Hinglish voice and promise-to-pay
+
+The simulation voice adapter now continues into a deterministic, maximum-two-customer-turn
+dialogue for overdue invoices. A turn is accepted only after a `voice_hinglish` action has passed
+the normal consent, contact-window, frequency, suppression, and two-key checks and executed
+successfully. Customer transcripts are treated as untrusted input: they can select only a small
+intent set, while every spoken response comes from the registered template registry. The workflow
+can confirm identity, provide the existing secure payment link, capture a full-outstanding
+promise date within 30 days, stop, or hand off. It cannot negotiate, settle, threaten, alter an
+amount, or create free-form speech.
+
+Each provider turn has a durable idempotency key and is copied into the append-only case timeline.
+A captured promise is stored once with its transcript reference and is returned in case detail.
+English, Hindi, and common Hinglish stop phrases end the call immediately; explicit do-not-call
+language records the opt-out and cancels pending contact. Live ASR, TTS, and telephony remain an
+explicit integration boundary—the shipped path is a reproducible simulator, not a claim of a live
+voice deployment.
+
+Run the September 3 acceptance slice with:
+
+```bash
+make test-september-3
+```
+
 Run the acceptance tests locally:
 
 ```bash
@@ -329,12 +354,17 @@ The tests demonstrate:
 - the latest batch scoreboard includes the case mix required by the dashboard;
 - filtered case reads expose diagnosis, plans, attribution, and ordered audit events;
 - the recordable Scoreboard and Case Timeline compile as a production Next.js application.
+- bounded voice accepts only successfully gated invoice calls and registered reply templates;
+- provider turn redelivery creates one voice turn and one promise-to-pay record;
+- opt-out language ends the call immediately, records DNC, and cancels later contact;
+- unclear voice input hands off after at most two customer turns.
 
 ## API
 
 - `POST /webhooks/razorpay` — HMAC verification, durable inbox, dedupe, async enqueue
 - `GET /cases?state=&leak_type=` — filterable case index for the timeline
 - `GET /cases/{case_id}` — case, diagnosis, action ladder, attribution, and audit timeline
+- `POST /actions/{action_id}/voice/turns` — idempotent simulated voice turn and bounded reply
 - `GET /cases/{case_id}/audit.json` — exportable append-only audit record
 - `GET /cases/{case_id}/replay` — stored projection, ordered events, replayed state
 - `GET /suppressions` — currently open circuit breakers
@@ -358,4 +388,5 @@ gating, simulated interventions, payment-success cancellation, aggregate inciden
 scope-specific suppression, and LLM accounting are built. Live provider calls and full recovery
 verification outside the Razorpay success-webhook path remain reserved for later build slices.
 Attribution, holdout enforcement, the scoreboard API, the reproducible September 1 evaluation
-harness, and the September 2 Scoreboard and Case Timeline are built.
+harness, the September 2 Scoreboard and Case Timeline, and the September 3 bounded simulated voice
+and promise-to-pay capture are built. Live voice transport is not.
