@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createSession,
@@ -23,6 +24,7 @@ const TELEMETRY_PREFIX = "leakproof:checkout-events:";
 let sdkPromise: Promise<void> | undefined;
 
 type CheckoutState = "idle" | "preparing" | "open" | "failed" | "completed";
+type CheckoutOutcome = "failed" | "completed";
 type PublicCheckout = Pick<
   DemoSession,
   | "session_id"
@@ -144,12 +146,14 @@ function openCheckout({
   recovery,
   setState,
   setMessage,
+  onOutcome,
 }: {
   checkout: PublicCheckout;
   session?: DemoSession;
   recovery: boolean;
   setState: (state: CheckoutState) => void;
   setMessage: (message: string) => void;
+  onOutcome: (outcome: CheckoutOutcome) => void;
 }) {
   if (!window.Razorpay) throw new Error("Razorpay Checkout is not available.");
   let completed = false;
@@ -171,6 +175,7 @@ function openCheckout({
       if (response.razorpay_order_id !== checkout.razorpay_order_id) {
         setState("failed");
         setMessage("Checkout returned a different order. Nothing was accepted.");
+        onOutcome("failed");
         return;
       }
       completed = true;
@@ -180,10 +185,11 @@ function openCheckout({
       );
       const completion = newTelemetry("checkout_completed", { attempt_id: attemptId });
       if (session) {
-        void deliverTelemetry(session, completion).then((delivered) => {
-          if (delivered) sessionStorage.removeItem(SESSION_STORAGE_KEY);
-        });
+        // Keep the session available to the live dashboard until a signed provider
+        // webhook marks it recovered or the session expires. Browser completion is advisory.
+        void deliverTelemetry(session, completion);
       }
+      onOutcome("completed");
     },
     modal: {
       confirm_close: true,
@@ -205,6 +211,7 @@ function openCheckout({
   instance.on("payment.failed", (response) => {
     setState("failed");
     setMessage(failureMessage(response));
+    onOutcome("failed");
   });
   instance.open();
   setState("open");
@@ -235,6 +242,7 @@ function OrderReceipt({ checkout, recovered }: { checkout: PublicCheckout; recov
 }
 
 export function DemoCheckout() {
+  const router = useRouter();
   const [recipient, setRecipient] = useState("");
   const [session, setSession] = useState<DemoSession>();
   const [state, setState] = useState<CheckoutState>("idle");
@@ -274,14 +282,21 @@ export function DemoCheckout() {
         setSession(active);
       }
       await Promise.all([loadCheckoutSdk(), flushTelemetry(active)]);
-      openCheckout({ checkout: active, session: active, recovery: false, setState, setMessage });
+      openCheckout({
+        checkout: active,
+        session: active,
+        recovery: false,
+        setState,
+        setMessage,
+        onOutcome: () => router.replace("/"),
+      });
     } catch (error) {
       setState("failed");
       setMessage(errorMessage(error));
     } finally {
       preparing.current = false;
     }
-  }, [recipient, session]);
+  }, [recipient, router, session]);
 
   return (
     <div className="checkout-card">
@@ -314,6 +329,7 @@ export function DemoCheckout() {
 }
 
 export function RecoveryCheckout({ token }: { token: string }) {
+  const router = useRouter();
   const [bootstrap, setBootstrap] = useState<RecoveryBootstrap>();
   const [state, setState] = useState<CheckoutState>("preparing");
   const [message, setMessage] = useState("Verifying the signed recovery link and checking Razorpay payment state…");
@@ -343,7 +359,13 @@ export function RecoveryCheckout({ token }: { token: string }) {
   const reopen = () => {
     if (!bootstrap) return;
     try {
-      openCheckout({ checkout: bootstrap, recovery: true, setState, setMessage });
+      openCheckout({
+        checkout: bootstrap,
+        recovery: true,
+        setState,
+        setMessage,
+        onOutcome: () => router.replace("/"),
+      });
     } catch (error) {
       setState("failed");
       setMessage(errorMessage(error));

@@ -4,10 +4,20 @@ from functools import lru_cache
 
 from leakproof.config import get_settings
 from leakproof.demo.rate_limit import InMemoryRateLimiter, RedisRateLimiter
-from leakproof.providers.contracts import CaseInsightProvider, PaymentProvider, ProviderError
-from leakproof.providers.fakes import FakeCaseInsightProvider, FakePaymentProvider
+from leakproof.providers.contracts import (
+    CaseInsightProvider,
+    EmailProvider,
+    PaymentProvider,
+    ProviderError,
+)
+from leakproof.providers.fakes import (
+    FakeCaseInsightProvider,
+    FakeEmailProvider,
+    FakePaymentProvider,
+)
 from leakproof.providers.openai import OpenAICaseInsightProvider
 from leakproof.providers.razorpay import RazorpayPaymentProvider
+from leakproof.providers.resend import ResendEmailProvider
 
 
 @lru_cache
@@ -41,6 +51,27 @@ def get_case_insight_provider() -> CaseInsightProvider:
         model=settings.openai_model,
         usd_to_inr=settings.openai_usd_to_inr,
     )
+
+
+class _UnavailableEmailProvider:
+    def send_recovery_email(self, _request):
+        raise ProviderError(
+            provider="resend",
+            operation="send_recovery_email",
+            error_class="configuration_missing",
+            retryable=False,
+            message="Resend API key or sender address is not configured",
+        )
+
+
+@lru_cache
+def get_email_provider() -> EmailProvider:
+    settings = get_settings()
+    if settings.mode == "simulation":
+        return FakeEmailProvider()
+    if not settings.resend_api_key or not settings.resend_from_email:
+        return _UnavailableEmailProvider()
+    return ResendEmailProvider(settings.resend_api_key, settings.resend_from_email)
 
 
 @lru_cache

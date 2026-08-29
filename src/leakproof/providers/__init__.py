@@ -15,6 +15,7 @@ from leakproof.providers.contracts import (
 )
 from leakproof.providers.openai import OpenAICaseInsightProvider
 from leakproof.providers.razorpay import RazorpayPaymentProvider
+from leakproof.providers.resend import ResendEmailProvider
 
 __all__ = [
     "CaseInsightProvider",
@@ -30,4 +31,5 @@ __all__ = [
     "ProviderError",
     "RazorpayPaymentProvider",
     "OpenAICaseInsightProvider",
+    "ResendEmailProvider",
 ]

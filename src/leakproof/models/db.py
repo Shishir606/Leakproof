@@ -397,6 +397,7 @@ class EmailDelivery(Base):
     __tablename__ = "email_deliveries"
     __table_args__ = (
         UniqueConstraint("action_id", name="uq_email_deliveries_action"),
+        UniqueConstraint("case_id", name="uq_email_deliveries_case"),
         UniqueConstraint("provider_email_id", name="uq_email_deliveries_provider_email"),
         Index("ix_email_deliveries_recipient_created", "recipient_hash", "created_at"),
     )

@@ -9,13 +9,18 @@ from sqlalchemy import select
 from leakproof.actuators import due_action_ids, execute_action
 from leakproof.config import get_settings
 from leakproof.db import SessionLocal
+from leakproof.demo.email import execute_demo_recovery_email, schedule_demo_recovery_email
 from leakproof.demo.insights import generate_case_insight, mark_case_insight_pending
 from leakproof.demo.service import due_abandonment_checks, materialize_checkout_abandonment
 from leakproof.diagnosis import diagnose_case
 from leakproof.diagnosis.tier2 import run_cohort_scan
-from leakproof.models.db import CaseInsightRecord, DemoSession, RecoveryCase, WebhookEvent
+from leakproof.models.db import Action, CaseInsightRecord, DemoSession, RecoveryCase, WebhookEvent
 from leakproof.providers import ProviderError
-from leakproof.providers.factory import get_case_insight_provider, get_payment_provider
+from leakproof.providers.factory import (
+    get_case_insight_provider,
+    get_email_provider,
+    get_payment_provider,
+)
 from leakproof.sensors.pollers import (
     poll_checkout_abandonment,
     poll_invoice_aging,
@@ -101,6 +106,7 @@ def _prepare_case_insight(session, case_id: str) -> bool:
     if demo is None:
         return False
     diagnose_case(session, case.id)
+    schedule_demo_recovery_email(session, case.id, settings=get_settings())
     mark_case_insight_pending(session, case.id)
     session.commit()
     return True
@@ -130,6 +136,25 @@ def dispatch_unprocessed_webhooks(limit: int = 100) -> int:
 )
 def run_action(action_id: str) -> dict:
     with SessionLocal() as session:
+        action = session.get(Action, action_id)
+        case = session.get(RecoveryCase, action.case_id) if action is not None else None
+        demo = (
+            session.scalar(
+                select(DemoSession).where(
+                    DemoSession.merchant_id == case.merchant_id,
+                    DemoSession.customer_id == case.customer_id,
+                )
+            )
+            if case is not None
+            else None
+        )
+        if action is not None and action.action_type == "email_link" and demo is not None:
+            return execute_demo_recovery_email(
+                session,
+                action_id,
+                provider=get_email_provider(),
+                settings=get_settings(),
+            ).__dict__
         return execute_action(session, action_id).__dict__
 
 

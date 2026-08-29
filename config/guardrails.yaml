@@ -15,7 +15,7 @@ frequency:
   min_hours_between_same_channel: 48
   min_hours_between_any_contact: 24
 schedule:
-  contact_window_ist: {start: "08:00", end: "19:00"}
+  contact_window_ist: {start: "00:00", end: "23:59"}
   decision_outside_window: RESCHEDULE
   blackout_dates: []
 money:

@@ -12,7 +12,7 @@ export default function DemoPage() {
     <main className="checkout-page">
       <header className="checkout-nav">
         <Logo />
-        <nav><Link href="/">Recovery scoreboard</Link><Link href="/cases">Case timeline</Link></nav>
+        <nav><Link href="/">Live dashboard</Link><Link href="/scenario-lab">Scenario Lab</Link></nav>
       </header>
       <div className="checkout-layout">
         <section className="checkout-hero">

@@ -80,6 +80,8 @@ make test-api-august-29
 make test-api-august-30
 make test-api-august-31
 make test-api-september-1
+make test-api-september-2
+make test-api-september-3
 make test-august-30
 make test-august-31
 make test-september-1
@@ -97,7 +99,7 @@ Postgres and Redis remain separate infrastructure containers. The Next.js dashbo
 at `http://localhost:3000` and reads the same API data used by the acceptance tests. Beat also rescans the durable inbox
 every minute, so a webhook committed during a temporary broker outage is not lost.
 
-The public recovery API is implemented through the 1 September checkpoint. Razorpay failure and
+The public recovery API is implemented through the 3 September checkpoint. Razorpay failure and
 success webhooks bind to the original demo order, failure replaces abandonment without creating a
 second case, and either success event closes that case while cancelling pending actions. Recovery
 links use signed 30-minute tokens bound to session, merchant, order, amount, and currency; the
@@ -111,6 +113,25 @@ usage, latency, retries, schema status, and paise cost are persisted across the 
 provider-call audit, session projection, and append-only timeline. Timeout, quota, invalid-schema,
 missing-configuration, and per-case budget failures produce deterministic guidance and never block
 the signed recovery path. Run this checkpoint with `make test-api-september-1`.
+
+The 2 September checkpoint adds the live-only Resend ladder. Each detected demo case gets one
+registered recovery email action 30 demo seconds after its immediate in-app link. Addresses are
+encrypted at rest and decrypted only immediately before sending; missing or non-allowlisted
+recipients, the rolling five-per-address limit, and daily/monthly free-tier ceilings all fall back
+to a safe preview without a provider call. Resend requests use the action idempotency key, while
+raw-body Svix verification, durable event deduplication, and event-time reconciliation make sent,
+delivered, clicked, bounced, complained, and failed webhooks converge even when they arrive out of
+order. Session projections expose delivery status without recipient data. Run this checkpoint with
+`make test-api-september-2`.
+
+The 3 September checkpoint makes **Live Demo** the default dashboard. It resumes the browser's
+active demo session and polls its sanitized API projection every two seconds only while the session
+is active. The view separates Browser Telemetry, Razorpay Webhook, Luna, and Resend sources and
+shows the deterministic diagnosis, optional insight or fallback, pre-flight gate, bounded recovery
+actions, provider receipts, verified recovered amount, latency, failures, and Luna cost. The former
+treatment-versus-holdout dashboard now lives at `/scenario-lab` behind an explicit synthetic-only
+banner; no simulator fields enter the live projection. Run the integrated API and production UI
+checkpoint with `make test-api-september-3`.
 
 `make verify-foundation` runs a fresh end-to-end check against the live API, Celery worker, and
 PostgreSQL. It sends three payment failures plus a duplicate, verifies that all three signals land
@@ -424,7 +445,8 @@ database cap. A dismissal schedules a 30-second Celery re-check. The worker re-r
 events and Razorpay payment state before creating one treatment-only `CHECKOUT_ABANDON` case. A
 15-second Beat scan rescues a persisted dismissal if the immediate broker handoff fails.
 
-The dashboard exposes the browser flow at `http://localhost:3000/demo`. It creates the fixed order,
+The dashboard defaults to the live operational view at `http://localhost:3000`. The browser flow
+at `http://localhost:3000/demo` creates the fixed order,
 loads Razorpay Checkout, persists idempotent telemetry before delivery, and handles submission,
 failure, and dismissal without treating browser callbacks as payment truth. Signed links open at
 `/recover/{token}` and reuse the verified original order rather than creating a replacement order.
@@ -481,7 +503,10 @@ The tests demonstrate:
 
 - `POST /demo/sessions` — fixed Razorpay test order and signed Checkout session bootstrap
 - `POST /demo/sessions/{session_id}/checkout-events` — bounded, idempotent browser telemetry
+- `GET /demo/sessions/{session_id}` — sanitized live case, action, provider, timeline, and metrics projection
+- `GET /recover/{signed_token}` — verified bootstrap for the original unpaid Razorpay order
 - `POST /webhooks/razorpay` — HMAC verification, durable inbox, dedupe, async enqueue
+- `POST /webhooks/resend` — raw-body signature verification and redacted delivery reconciliation
 - `POST /batch/run` — execute or idempotently replay the full synthetic batch
 - `GET /cases?state=&leak_type=` — filterable case index for the timeline
 - `GET /cases/{case_id}` — case, diagnosis, action ladder, attribution, and audit timeline
@@ -505,13 +530,12 @@ structured cohort transport are deterministic simulations in the default mode.
 The approved free-first live integration direction is documented in
 [`API_INTEGRATION_PLAN.md`](API_INTEGRATION_PLAN.md).
 
-The simulator feeds normalized synthetic signals directly into the shared case/event spine. The
-scheduled checkout, invoice, subscription, and 24-hour reconciliation entry points and their
-cadences are registered with Celery Beat, but their live upstream provider adapters still return
-empty scan results until later integration slices. Diagnosis, planning, scheduling, pre-flight
-gating, simulated interventions, payment-success cancellation, aggregate incident reasoning,
-scope-specific suppression, and LLM accounting are built. Live provider calls and full recovery
-verification outside the Razorpay success-webhook path remain reserved for later build slices.
+The simulator feeds normalized synthetic signals directly into the shared case/event spine and
+remains visibly isolated under Scenario Lab. Razorpay test order creation, browser Checkout
+telemetry, signed original-order recovery, Razorpay success/failure reconciliation, Luna case
+insights with deterministic fallback, and allowlisted Resend delivery are implemented for the
+public live-demo path. The scheduled invoice, subscription, and 24-hour reconciliation entry
+points remain simulator-backed rather than public live integrations.
 Attribution, holdout enforcement, the scoreboard API, the reproducible September 1 evaluation
 harness, the September 2 Scoreboard and Case Timeline, the September 3 bounded simulated voice,
 and the September 4 full-batch outcome and exception workflow are built. Live voice transport is

@@ -2,6 +2,7 @@ import type {
   ApiErrorPayload,
   CheckoutEvent,
   DemoSession,
+  DemoSessionProjection,
   RecoveryBootstrap,
 } from "./demo-types";
 
@@ -50,10 +51,25 @@ export async function sendCheckoutEvent(
         "x-leakproof-session-token": session.session_token,
       },
       body: JSON.stringify(event),
-      keepalive: event.event_type === "checkout_dismissed",
+      keepalive:
+        event.event_type === "checkout_dismissed" ||
+        event.event_type === "checkout_completed",
     },
   );
   await readResponse(response);
+}
+
+export async function getSessionProjection(
+  session: Pick<DemoSession, "session_id" | "session_token">,
+): Promise<DemoSessionProjection> {
+  const response = await fetch(
+    `/api/demo/sessions/${encodeURIComponent(session.session_id)}`,
+    {
+      cache: "no-store",
+      headers: { "x-leakproof-session-token": session.session_token },
+    },
+  );
+  return readResponse<DemoSessionProjection>(response);
 }
 
 export async function getRecoveryBootstrap(token: string): Promise<RecoveryBootstrap> {

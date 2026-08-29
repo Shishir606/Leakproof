@@ -12,6 +12,7 @@ from leakproof.diagnosis import refresh_payment_diagnosis
 from leakproof.models.db import DemoSession, RecoveryCase, WebhookEvent
 from leakproof.models.domain import Arm, LeakType
 from leakproof.sensors.normalizer import normalize_razorpay, normalize_razorpay_paid
+from leakproof.sensors.resend import process_stored_resend_webhook
 from leakproof.services import NormalizedSignal, PaidSignal, record_paid_signal, record_signal
 
 
@@ -110,6 +111,8 @@ def process_stored_webhook(session: Session, webhook_id: int) -> str | None:
     )
     if event is None:
         raise LookupError(webhook_id)
+    if event.provider == "resend":
+        return process_stored_resend_webhook(session, webhook_id)
     if event.processed_at is not None:
         return None
 

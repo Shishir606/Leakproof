@@ -78,6 +78,8 @@ class EmailSendResult:
     provider_email_id: str
     status: str
     request_id: str | None = None
+    latency_ms: int = 0
+    attempts: int = 1
 
 
 @runtime_checkable

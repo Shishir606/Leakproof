@@ -61,6 +61,7 @@ from leakproof.sensors.webhooks import (
     InvalidWebhookSignature,
     persist_webhook,
     verify_razorpay_signature,
+    verify_resend_signature,
 )
 from leakproof.simulator.generate import generate_dataset, load_parameters
 from leakproof.voice import handle_voice_turn
@@ -313,19 +314,54 @@ async def razorpay_webhook(
     response_model=WebhookAccepted,
     responses={503: {"model": APIError}},
 )
-def resend_webhook_skeleton(
-    payload: ResendWebhookEnvelope,
+async def resend_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    session: SessionDep,
     svix_id: str = Header(default=""),
     svix_timestamp: str = Header(default=""),
     svix_signature: str = Header(default=""),
-) -> JSONResponse:
-    del payload, svix_id, svix_timestamp, svix_signature
-    return contract_error(
-        503,
-        "integration_not_ready",
-        "Resend webhook processing is scheduled for the 2 September slice",
-        retryable=True,
+) -> WebhookAccepted | JSONResponse:
+    settings = get_settings()
+    if not settings.resend_webhook_secret:
+        return contract_error(
+            503,
+            "integration_not_ready",
+            "Resend webhook verification is not configured",
+            retryable=True,
+        )
+    body = await request.body()
+    try:
+        verify_resend_signature(
+            body,
+            message_id=svix_id,
+            timestamp=svix_timestamp,
+            signature=svix_signature,
+            secret=settings.resend_webhook_secret,
+        )
+    except InvalidWebhookSignature as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    try:
+        envelope = ResendWebhookEnvelope.model_validate_json(body)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail="invalid Resend webhook envelope") from exc
+    # Delivery webhooks can contain recipient fields. Persist only the event material needed
+    # for reconciliation so addresses cannot escape through logs, APIs, or audit projections.
+    payload = {
+        "type": envelope.type,
+        "created_at": envelope.created_at.isoformat(),
+        "data": {"email_id": envelope.data.email_id},
+    }
+    ingested = persist_webhook(
+        session,
+        merchant_id=settings.default_merchant_id,
+        payload=payload,
+        header_event_id=svix_id,
+        provider="resend",
     )
+    if not ingested.duplicate:
+        background_tasks.add_task(enqueue_webhook, ingested.id)
+    return WebhookAccepted(duplicate=ingested.duplicate, webhook_id=ingested.id)
 
 
 @app.post(

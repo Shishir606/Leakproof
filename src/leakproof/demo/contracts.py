@@ -163,6 +163,19 @@ class ProviderStatus(StrictContract):
     operation: str
     status: str
     request_id: str | None = None
+    latency_ms: int | None = Field(default=None, ge=0)
+    attempts: int | None = Field(default=None, ge=1)
+    error_class: str | None = None
+
+
+class RecoveryActionProjection(StrictContract):
+    action_id: str | None = None
+    action_type: Literal["recovery_link", "email_link"]
+    status: str
+    scheduled_for: datetime
+    executed_at: datetime | None = None
+    gate_verdict: str | None = None
+    provider_receipt_id: str | None = None
 
 
 class TimelineItem(StrictContract):
@@ -191,8 +204,11 @@ class DemoSessionProjection(StrictContract):
     email_mode: EmailMode
     case: CaseProjection | None = None
     recovery_url_available: bool = False
+    gate_verdict: str | None = None
+    recovery_actions: list[RecoveryActionProjection] = Field(default_factory=list)
     provider_statuses: list[ProviderStatus] = Field(default_factory=list)
     timeline: list[TimelineItem] = Field(default_factory=list)
+    end_to_end_latency_seconds: float | None = Field(default=None, ge=0)
     metrics: OperationalMetrics
 
 
