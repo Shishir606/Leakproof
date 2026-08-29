@@ -62,10 +62,6 @@ class Settings(BaseSettings):
                 "razorpay_key_id",
                 "razorpay_key_secret",
                 "razorpay_webhook_secret",
-                "openai_api_key",
-                "resend_api_key",
-                "resend_webhook_secret",
-                "resend_from_email",
             )
             if not getattr(self, name).strip()
         ]
@@ -81,7 +77,7 @@ class Settings(BaseSettings):
             raise ValueError("live_demo requires a Razorpay test-mode key beginning with rzp_test_")
         if len(self.recovery_token_secret) < 32:
             raise ValueError("LEAKPROOF_RECOVERY_TOKEN_SECRET must contain at least 32 characters")
-        if "@" not in self.resend_from_email:
+        if self.resend_from_email and "@" not in self.resend_from_email:
             raise ValueError("LEAKPROOF_RESEND_FROM_EMAIL must be an email address")
         if self.resend_monthly_limit < self.resend_daily_limit:
             raise ValueError("monthly Resend limit must be greater than or equal to daily limit")

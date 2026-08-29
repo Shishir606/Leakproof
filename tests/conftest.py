@@ -11,6 +11,10 @@ from sqlalchemy.pool import StaticPool
 
 os.environ.setdefault("LEAKPROOF_ENVIRONMENT", "test")
 os.environ.setdefault("LEAKPROOF_RAZORPAY_WEBHOOK_SECRET", "test-secret")
+# Keep the test process isolated from a developer's credential-bearing .env file.
+os.environ["LEAKPROOF_MODE"] = "simulation"
+os.environ["LEAKPROOF_RAZORPAY_KEY_ID"] = ""
+os.environ["LEAKPROOF_RAZORPAY_KEY_SECRET"] = ""
 
 from leakproof.api.app import app  # noqa: E402
 from leakproof.db import Base, get_session  # noqa: E402

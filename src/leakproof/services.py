@@ -262,6 +262,10 @@ class PaidSignal:
 def record_paid_signal(session: Session, signal: PaidSignal) -> RecoveryCase | None:
     """Stop a paid case and persist pre-declared, last-touch attribution when eligible."""
     exact = [RecoveryCase.entity_id == signal.entity_id]
+    if signal.entity_root_id:
+        # Live abandonment cases use the original order as their entity while a
+        # payment.captured success carries it as the root entity.
+        exact.append(RecoveryCase.entity_id == signal.entity_root_id)
     if signal.entity_root_id and signal.customer_id:
         exact.append(RecoveryCase.dedupe_key == f"pf:{signal.customer_id}:{signal.entity_root_id}")
     candidates = list(
@@ -285,6 +289,9 @@ def record_paid_signal(session: Session, signal: PaidSignal) -> RecoveryCase | N
     matched_by = ""
     for candidate in candidates:
         entity_match = candidate.entity_id == signal.entity_id or (
+            signal.entity_root_id is not None
+            and candidate.entity_id == signal.entity_root_id
+        ) or (
             signal.entity_root_id is not None
             and candidate.dedupe_key == f"pf:{signal.customer_id}:{signal.entity_root_id}"
         )

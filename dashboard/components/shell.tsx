@@ -1,6 +1,6 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { GridIcon, TimelineIcon } from "./icons";
+import { CardIcon, GridIcon, TimelineIcon } from "./icons";
 
 export function Logo() {
   return (
@@ -11,7 +11,7 @@ export function Logo() {
   );
 }
 
-export function Shell({ children, active }: { children: ReactNode; active: "overview" | "cases" }) {
+export function Shell({ children, active }: { children: ReactNode; active: "overview" | "cases" | "demo" }) {
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -22,6 +22,9 @@ export function Shell({ children, active }: { children: ReactNode; active: "over
           </Link>
           <Link className={active === "cases" ? "nav-item active" : "nav-item"} href="/cases">
             <TimelineIcon /> <span>Case timeline</span>
+          </Link>
+          <Link className={active === "demo" ? "nav-item active" : "nav-item"} href="/demo">
+            <CardIcon /> <span>Live checkout</span>
           </Link>
         </nav>
         <div className="sidebar-footer">

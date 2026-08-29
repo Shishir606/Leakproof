@@ -33,7 +33,11 @@ from leakproof.demo.service import (
     DemoRateLimitExceeded,
     DemoSessionExpired,
     DemoSessionUnauthorized,
+    RecoveryExpired,
+    RecoveryOrderNotAvailable,
+    RecoveryTokenInvalid,
     create_demo_session,
+    get_recovery_bootstrap,
     ingest_checkout_event,
 )
 from leakproof.measurement import ExceptionReport, Scoreboard, compute_scoreboard, exception_report
@@ -441,16 +445,44 @@ def checkout_event_route(
 @app.get(
     "/recover/{signed_token}",
     response_model=RecoveryBootstrap,
-    responses={503: {"model": APIError}},
+    responses={
+        404: {"model": APIError},
+        409: {"model": APIError},
+        410: {"model": APIError},
+        502: {"model": APIError},
+        503: {"model": APIError},
+    },
 )
-def recovery_skeleton(signed_token: str) -> JSONResponse:
-    del signed_token
-    return contract_error(
-        503,
-        "integration_not_ready",
-        "Signed recovery bootstrap is scheduled for the 31 August slice",
-        retryable=True,
-    )
+def recovery_route(
+    signed_token: str,
+    session: SessionDep,
+    provider: PaymentProviderDep,
+) -> RecoveryBootstrap | JSONResponse:
+    try:
+        return get_recovery_bootstrap(
+            session,
+            signed_token,
+            provider=provider,
+            settings=get_settings(),
+        )
+    except RecoveryTokenInvalid:
+        # Do not reveal which bound claim failed.
+        return contract_error(404, "invalid_recovery_token", "recovery link is invalid")
+    except RecoveryExpired:
+        return contract_error(410, "recovery_expired", "recovery link has expired")
+    except RecoveryOrderNotAvailable:
+        return contract_error(
+            409,
+            "order_not_recoverable",
+            "the original order is no longer available for recovery",
+        )
+    except ProviderError as exc:
+        return contract_error(
+            503 if exc.retryable else 502,
+            exc.error_class,
+            "Razorpay payment-state verification failed",
+            retryable=exc.retryable,
+        )
 
 
 @app.get(

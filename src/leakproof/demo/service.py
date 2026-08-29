@@ -17,16 +17,21 @@ from leakproof.demo.contracts import (
     DemoSessionCreateRequest,
     DemoSessionState,
     EmailMode,
+    RecoveryBootstrap,
     assert_session_transition,
     live_case_dedupe_key,
 )
 from leakproof.demo.rate_limit import InMemoryRateLimiter, RedisRateLimiter
 from leakproof.demo.security import (
+    InvalidRecoveryToken,
     InvalidSessionToken,
+    RecoveryTokenExpired,
     SessionTokenExpired,
     encrypt_recipient,
+    issue_recovery_token,
     issue_session_token,
     recipient_hash,
+    verify_recovery_token,
     verify_session_token,
 )
 from leakproof.models.db import (
@@ -49,6 +54,18 @@ class DemoSessionUnauthorized(ValueError):
 
 
 class DemoSessionExpired(ValueError):
+    pass
+
+
+class RecoveryTokenInvalid(ValueError):
+    pass
+
+
+class RecoveryExpired(ValueError):
+    pass
+
+
+class RecoveryOrderNotAvailable(ValueError):
     pass
 
 
@@ -229,6 +246,135 @@ def create_demo_session(
         currency=demo.currency,
         expires_at=expires_at,
         email_mode=(EmailMode.ALLOWLISTED if allowlisted else EmailMode.PREVIEW_ONLY),
+    )
+
+
+def issue_demo_recovery_token(
+    session: Session,
+    session_id: str,
+    *,
+    settings: Settings,
+    now: datetime | None = None,
+) -> str:
+    """Issue a short-lived, fully bound token only for an active recovery session."""
+    now = _as_utc(now or datetime.now(UTC))
+    demo = session.get(DemoSession, session_id)
+    if demo is None:
+        raise RecoveryTokenInvalid("recovery session was not found")
+    if _as_utc(demo.expires_at) <= now:
+        raise RecoveryExpired("demo session has expired")
+    if DemoSessionState(demo.state) not in {
+        DemoSessionState.AT_RISK,
+        DemoSessionState.CHECKOUT_OPEN,
+    }:
+        raise RecoveryOrderNotAvailable("the order is not available for recovery")
+    return issue_recovery_token(
+        demo.id,
+        demo.merchant_id,
+        demo.razorpay_order_id,
+        demo.amount_paise,
+        demo.currency,
+        now + timedelta(minutes=30),
+        _signing_secret(settings),
+    )
+
+
+def get_recovery_bootstrap(
+    session: Session,
+    signed_token: str,
+    *,
+    provider: PaymentProvider,
+    settings: Settings,
+    now: datetime | None = None,
+) -> RecoveryBootstrap:
+    """Verify all token bindings and re-read payment truth before reopening Checkout."""
+    now = _as_utc(now or datetime.now(UTC))
+    try:
+        claims = verify_recovery_token(signed_token, _signing_secret(settings), now=now)
+    except RecoveryTokenExpired as exc:
+        raise RecoveryExpired("recovery token has expired") from exc
+    except InvalidRecoveryToken as exc:
+        raise RecoveryTokenInvalid("invalid recovery token") from exc
+
+    demo = session.scalar(
+        select(DemoSession).where(DemoSession.id == claims.session_id).with_for_update()
+    )
+    if demo is None or (
+        demo.merchant_id != claims.merchant_id
+        or demo.razorpay_order_id != claims.order_id
+        or demo.amount_paise != claims.amount_paise
+        or demo.currency != claims.currency
+    ):
+        raise RecoveryTokenInvalid("invalid recovery token")
+    if _as_utc(demo.expires_at) <= now or DemoSessionState(demo.state) == DemoSessionState.EXPIRED:
+        if DemoSessionState(demo.state) != DemoSessionState.EXPIRED:
+            demo.state = DemoSessionState.EXPIRED.value
+            demo.updated_at = now
+            session.commit()
+        raise RecoveryExpired("demo session has expired")
+    if DemoSessionState(demo.state) == DemoSessionState.RECOVERED:
+        raise RecoveryOrderNotAvailable("the order has already been paid")
+    if DemoSessionState(demo.state) not in {
+        DemoSessionState.AT_RISK,
+        DemoSessionState.CHECKOUT_OPEN,
+    }:
+        raise RecoveryOrderNotAvailable("the order is not available for recovery")
+
+    started = time.perf_counter()
+    try:
+        payments = provider.list_order_payments(demo.razorpay_order_id)
+    except ProviderError as exc:
+        session.rollback()
+        _record_provider_call(
+            session,
+            session_id=demo.id,
+            provider="razorpay",
+            operation="recovery_order_check",
+            request_id=exc.request_id,
+            latency_ms=round((time.perf_counter() - started) * 1000),
+            status="failed",
+            metadata={},
+            error_class=exc.error_class,
+        )
+        session.commit()
+        raise
+
+    if any(payment.order_id != demo.razorpay_order_id for payment in payments):
+        raise ProviderError(
+            provider="razorpay",
+            operation="recovery_order_check",
+            error_class="response_mismatch",
+            retryable=False,
+            message="Razorpay returned a payment for another order",
+        )
+    _record_provider_call(
+        session,
+        session_id=demo.id,
+        provider="razorpay",
+        operation="recovery_order_check",
+        request_id=next((item.request_id for item in payments if item.request_id), None),
+        latency_ms=round((time.perf_counter() - started) * 1000),
+        status="succeeded",
+        metadata={
+            "payment_count": len(payments),
+            "statuses": sorted({item.status for item in payments}),
+        },
+    )
+    if any(payment.status in {"authorized", "captured"} for payment in payments):
+        session.commit()
+        raise RecoveryOrderNotAvailable("the order is no longer available for recovery")
+
+    assert_session_transition(DemoSessionState(demo.state), DemoSessionState.CHECKOUT_OPEN)
+    demo.state = DemoSessionState.CHECKOUT_OPEN.value
+    demo.updated_at = now
+    session.commit()
+    return RecoveryBootstrap(
+        session_id=demo.id,
+        razorpay_key_id=settings.razorpay_key_id or "rzp_test_simulated",
+        razorpay_order_id=demo.razorpay_order_id,
+        amount_paise=demo.amount_paise,
+        currency=demo.currency,
+        expires_at=min(claims.expires_at, _as_utc(demo.expires_at)),
     )
 
 

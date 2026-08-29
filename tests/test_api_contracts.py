@@ -52,9 +52,20 @@ def test_simulation_settings_need_no_provider_secrets():
     assert settings.openai_model == "gpt-5.6-luna"
 
 
-def test_live_demo_settings_require_every_provider_boundary():
+def test_live_demo_settings_require_current_razorpay_boundary():
     with pytest.raises(ValidationError, match="configuration is incomplete"):
         Settings(_env_file=None, mode="live_demo")
+
+
+def test_live_demo_does_not_require_future_openai_and_resend_slices():
+    settings = live_settings(
+        openai_api_key="",
+        resend_api_key="",
+        resend_webhook_secret="",
+        resend_from_email="",
+    )
+
+    assert settings.mode == "live_demo"
 
 
 def test_live_demo_rejects_non_test_razorpay_keys():
@@ -215,8 +226,16 @@ def test_checkout_event_route_requires_session_token_with_typed_error(client):
     assert response.json()["error"]["code"] == "session_token_required"
 
 
-def test_recovery_and_projection_routes_have_typed_skeletons(client):
-    assert_typed_error(client.get("/recover/signed-token"))
+def test_recovery_route_fails_closed_and_projection_remains_typed(client):
+    recovery = client.get("/recover/signed-token")
+    assert recovery.status_code == 404
+    assert recovery.json() == {
+        "error": {
+            "code": "invalid_recovery_token",
+            "message": "recovery link is invalid",
+            "retryable": False,
+        }
+    }
     assert_typed_error(
         client.get(
             "/demo/sessions/session-1",

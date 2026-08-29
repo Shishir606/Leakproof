@@ -1,4 +1,4 @@
-.PHONY: install lint test test-august-27 test-august-28 test-august-29 test-api-august-29 test-api-august-30 test-august-30 test-august-31 test-september-1 test-september-2 test-september-3 test-september-4 evals dashboard batch build up down migrate demo-webhook verify-foundation seed tunnel
+.PHONY: install lint test test-august-27 test-august-28 test-august-29 test-api-august-29 test-api-august-30 test-api-august-31 test-august-30 test-august-31 test-september-1 test-september-2 test-september-3 test-september-4 evals dashboard batch build up down migrate demo-webhook verify-foundation seed tunnel
 
 install:
 	uv sync --extra dev
@@ -24,6 +24,9 @@ test-api-august-29:
 
 test-api-august-30:
 	uv run pytest tests/test_api_contracts.py tests/test_api_august_30.py
+
+test-api-august-31:
+	uv run pytest tests/test_api_contracts.py tests/test_api_august_30.py tests/test_api_august_31.py tests/test_webhooks.py
 
 test-august-30:
 	uv run pytest tests/test_tier2.py

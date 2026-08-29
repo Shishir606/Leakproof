@@ -76,6 +76,9 @@ make seed
 make test-august-27
 make test-august-28
 make test-august-29
+make test-api-august-29
+make test-api-august-30
+make test-api-august-31
 make test-august-30
 make test-august-31
 make test-september-1
@@ -92,6 +95,13 @@ worker, and Celery Beat. The migration job and all three application services re
 Postgres and Redis remain separate infrastructure containers. The Next.js dashboard is available
 at `http://localhost:3000` and reads the same API data used by the acceptance tests. Beat also rescans the durable inbox
 every minute, so a webhook committed during a temporary broker outage is not lost.
+
+The public recovery API is implemented through the 31 August checkpoint. Razorpay failure and
+success webhooks bind to the original demo order, failure replaces abandonment without creating a
+second case, and either success event closes that case while cancelling pending actions. Recovery
+links use signed 30-minute tokens bound to session, merchant, order, amount, and currency; the
+bootstrap route rechecks Razorpay payment state and reuses only the original unpaid order. Run the
+complete checkpoint with `make test-api-august-31`.
 
 `make verify-foundation` runs a fresh end-to-end check against the live API, Celery worker, and
 PostgreSQL. It sends three payment failures plus a duplicate, verifies that all three signals land
@@ -404,6 +414,11 @@ session token, deduplicates by browser event ID, and enforces both rolling Redis
 database cap. A dismissal schedules a 30-second Celery re-check. The worker re-reads later browser
 events and Razorpay payment state before creating one treatment-only `CHECKOUT_ABANDON` case. A
 15-second Beat scan rescues a persisted dismissal if the immediate broker handoff fails.
+
+The dashboard exposes the browser flow at `http://localhost:3000/demo`. It creates the fixed order,
+loads Razorpay Checkout, persists idempotent telemetry before delivery, and handles submission,
+failure, and dismissal without treating browser callbacks as payment truth. Signed links open at
+`/recover/{token}` and reuse the verified original order rather than creating a replacement order.
 
 Run this API checkpoint with:
 

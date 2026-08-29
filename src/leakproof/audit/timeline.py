@@ -72,6 +72,19 @@ def replay_case(session: Session, case_id: str) -> ReplayedCase:
     snapshot = (
         CaseSnapshot.model_validate(source_snapshot) if source_snapshot is not None else projection
     )
+    for event in events:
+        if event.kind == "RECLASSIFIED":
+            for field in (
+                "to_leak_type",
+                "entity_type",
+                "entity_id",
+                "amount_at_risk",
+                "currency",
+            ):
+                if field not in event.payload:
+                    continue
+                target = "leak_type" if field == "to_leak_type" else field
+                setattr(snapshot, target, event.payload[field])
     snapshot.state = reduce_state(events)
     return ReplayedCase(
         case=snapshot,
