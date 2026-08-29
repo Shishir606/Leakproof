@@ -236,12 +236,12 @@ def test_recovery_route_fails_closed_and_projection_remains_typed(client):
             "retryable": False,
         }
     }
-    assert_typed_error(
-        client.get(
-            "/demo/sessions/session-1",
-            headers={"x-leakproof-session-token": "token-1"},
-        )
+    projection = client.get(
+        "/demo/sessions/session-1",
+        headers={"x-leakproof-session-token": "token-1"},
     )
+    assert projection.status_code == 401
+    assert projection.json()["error"]["code"] == "invalid_session_token"
 
 
 @pytest.mark.parametrize(

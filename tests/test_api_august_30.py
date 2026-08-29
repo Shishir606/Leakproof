@@ -323,9 +323,13 @@ def test_due_dismissal_creates_one_live_abandonment_case(session_factory):
             now=check_at + timedelta(seconds=1),
         )
         case = session.get(RecoveryCase, case_id)
+        detected = session.scalar(
+            select(Event).where(Event.case_id == case_id, Event.kind == "DETECTED")
+        )
 
         assert replayed == case_id
         assert case.leak_type == "CHECKOUT_ABANDON"
+        assert detected.payload["evidence"]["error_reason"] == "checkout_abandoned"
         assert case.dedupe_key == live_case_dedupe_key(
             created.session_id, created.razorpay_order_id
         )

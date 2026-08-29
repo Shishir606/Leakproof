@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from leakproof.audit.timeline import append_event
 from leakproof.demo.contracts import DemoSessionState, live_case_dedupe_key
+from leakproof.diagnosis import refresh_payment_diagnosis
 from leakproof.models.db import DemoSession, RecoveryCase, WebhookEvent
 from leakproof.models.domain import Arm, LeakType
 from leakproof.sensors.normalizer import normalize_razorpay, normalize_razorpay_paid
@@ -80,6 +81,7 @@ def _promote_abandonment_case(
         },
         actor="razorpay_reconciler",
     )
+    refresh_payment_diagnosis(session, case, signal.evidence)
 
 
 def _previous_paid_signal(

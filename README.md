@@ -79,6 +79,7 @@ make test-august-29
 make test-api-august-29
 make test-api-august-30
 make test-api-august-31
+make test-api-september-1
 make test-august-30
 make test-august-31
 make test-september-1
@@ -96,12 +97,20 @@ Postgres and Redis remain separate infrastructure containers. The Next.js dashbo
 at `http://localhost:3000` and reads the same API data used by the acceptance tests. Beat also rescans the durable inbox
 every minute, so a webhook committed during a temporary broker outage is not lost.
 
-The public recovery API is implemented through the 31 August checkpoint. Razorpay failure and
+The public recovery API is implemented through the 1 September checkpoint. Razorpay failure and
 success webhooks bind to the original demo order, failure replaces abandonment without creating a
 second case, and either success event closes that case while cancelling pending actions. Recovery
 links use signed 30-minute tokens bound to session, merchant, order, amount, and currency; the
 bootstrap route rechecks Razorpay payment state and reuses only the original unpaid order. Run the
-complete checkpoint with `make test-api-august-31`.
+Razorpay checkpoint with `make test-api-august-31`.
+
+Live cases now receive an asynchronous `gpt-5.6-luna` explanation after deterministic Tier 1
+diagnosis. Only the failure class, payment method, amount band, and allowlisted provider
+classifications enter the Responses API request. Strict `CaseInsight` output, request metadata,
+usage, latency, retries, schema status, and paise cost are persisted across the model ledger,
+provider-call audit, session projection, and append-only timeline. Timeout, quota, invalid-schema,
+missing-configuration, and per-case budget failures produce deterministic guidance and never block
+the signed recovery path. Run this checkpoint with `make test-api-september-1`.
 
 `make verify-foundation` runs a fresh end-to-end check against the live API, Celery worker, and
 PostgreSQL. It sends three payment failures plus a duplicate, verifies that all three signals land

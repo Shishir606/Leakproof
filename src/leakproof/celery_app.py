@@ -9,11 +9,13 @@ from sqlalchemy import select
 from leakproof.actuators import due_action_ids, execute_action
 from leakproof.config import get_settings
 from leakproof.db import SessionLocal
+from leakproof.demo.insights import generate_case_insight, mark_case_insight_pending
 from leakproof.demo.service import due_abandonment_checks, materialize_checkout_abandonment
+from leakproof.diagnosis import diagnose_case
 from leakproof.diagnosis.tier2 import run_cohort_scan
-from leakproof.models.db import RecoveryCase, WebhookEvent
+from leakproof.models.db import CaseInsightRecord, DemoSession, RecoveryCase, WebhookEvent
 from leakproof.providers import ProviderError
-from leakproof.providers.factory import get_payment_provider
+from leakproof.providers.factory import get_case_insight_provider, get_payment_provider
 from leakproof.sensors.pollers import (
     poll_checkout_abandonment,
     poll_invoice_aging,
@@ -42,6 +44,10 @@ celery.conf.update(
         },
         "dispatch-due-demo-abandonments": {
             "task": "leakproof.dispatch_due_demo_abandonments",
+            "schedule": 15.0,
+        },
+        "dispatch-pending-case-insights": {
+            "task": "leakproof.dispatch_pending_case_insights",
             "schedule": 15.0,
         },
         "cohort-scan-10m": {
@@ -76,7 +82,28 @@ celery.conf.update(
 )
 def process_webhook(webhook_id: int) -> str | None:
     with SessionLocal() as session:
-        return process_stored_webhook(session, webhook_id)
+        case_id = process_stored_webhook(session, webhook_id)
+        if case_id is not None and _prepare_case_insight(session, case_id):
+            run_case_insight.delay(case_id)
+        return case_id
+
+
+def _prepare_case_insight(session, case_id: str) -> bool:
+    case = session.get(RecoveryCase, case_id)
+    if case is None:
+        return False
+    demo = session.scalar(
+        select(DemoSession).where(
+            DemoSession.merchant_id == case.merchant_id,
+            DemoSession.customer_id == case.customer_id,
+        )
+    )
+    if demo is None:
+        return False
+    diagnose_case(session, case.id)
+    mark_case_insight_pending(session, case.id)
+    session.commit()
+    return True
 
 
 @celery.task(name="leakproof.dispatch_unprocessed_webhooks")
@@ -123,13 +150,16 @@ def dispatch_due_actions(limit: int = 100) -> int:
 )
 def check_demo_abandonment(session_id: str, dismissal_event_id: int) -> str | None:
     with SessionLocal() as session:
-        return materialize_checkout_abandonment(
+        case_id = materialize_checkout_abandonment(
             session,
             session_id,
             dismissal_event_id,
             provider=get_payment_provider(),
             settings=get_settings(),
         )
+        if case_id is not None and _prepare_case_insight(session, case_id):
+            run_case_insight.delay(case_id)
+        return case_id
 
 
 @celery.task(name="leakproof.dispatch_due_demo_abandonments")
@@ -139,6 +169,34 @@ def dispatch_due_demo_abandonments(limit: int = 100) -> int:
     for session_id, dismissal_event_id in checks:
         check_demo_abandonment.delay(session_id, dismissal_event_id)
     return len(checks)
+
+
+@celery.task(name="leakproof.generate_case_insight")
+def run_case_insight(case_id: str) -> str:
+    with SessionLocal() as session:
+        record = generate_case_insight(
+            session,
+            case_id,
+            provider=get_case_insight_provider(),
+            settings=get_settings(),
+        )
+        return record.status
+
+
+@celery.task(name="leakproof.dispatch_pending_case_insights")
+def dispatch_pending_case_insights(limit: int = 100) -> int:
+    with SessionLocal() as session:
+        ids = list(
+            session.scalars(
+                select(CaseInsightRecord.case_id)
+                .where(CaseInsightRecord.status == "pending")
+                .order_by(CaseInsightRecord.created_at)
+                .limit(limit)
+            )
+        )
+    for case_id in ids:
+        run_case_insight.delay(case_id)
+    return len(ids)
 
 
 @celery.task(name="leakproof.scan_failure_cohorts")

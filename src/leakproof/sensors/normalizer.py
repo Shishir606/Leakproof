@@ -42,6 +42,7 @@ def normalize_razorpay(merchant_id: str, payload: dict) -> NormalizedSignal | No
                     "error_source",
                     "error_step",
                     "error_reason",
+                    "method",
                 )
                 if entity.get(key) is not None
             },

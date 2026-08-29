@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from leakproof.demo.contracts import CaseInsight
 from leakproof.providers.contracts import (
     CaseInsightRequest,
+    CaseInsightResult,
     CreateOrderRequest,
     EmailSendRequest,
     EmailSendResult,
@@ -73,12 +74,29 @@ class FakeEmailProvider:
 
 @dataclass
 class FakeCaseInsightProvider:
-    result: CaseInsight
+    result: CaseInsight | None = None
     calls: list[CaseInsightRequest] = field(default_factory=list)
     failure: ProviderError | None = None
 
-    def explain_case(self, request: CaseInsightRequest) -> CaseInsight:
+    def explain_case(self, request: CaseInsightRequest) -> CaseInsightResult:
         self.calls.append(request)
         if self.failure:
             raise self.failure
-        return self.result
+        insight = self.result or CaseInsight(
+            summary=(
+                "The payment needs another customer-authorized attempt "
+                f"({request.failure_class})."
+            ),
+            probable_cause=f"Tier 1 classified the case as {request.failure_class}.",
+            evidence=[f"Amount band: {request.amount_band}"],
+            recommended_next_step="Reopen Checkout and let the customer choose how to pay.",
+            confidence=0.7,
+        )
+        return CaseInsightResult(
+            insight=insight,
+            request_id=f"resp_fake_{len(self.calls)}",
+            input_tokens=40,
+            output_tokens=80,
+            cost_paise=1,
+            latency_ms=1,
+        )

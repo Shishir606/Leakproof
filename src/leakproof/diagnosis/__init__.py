@@ -5,6 +5,7 @@ from leakproof.diagnosis.tier1 import (
     classify_payment_failure,
     classify_receivable,
     diagnose_case,
+    refresh_payment_diagnosis,
 )
 from leakproof.diagnosis.tier2 import (
     CohortAnomaly,
@@ -24,6 +25,7 @@ __all__ = [
     "classify_payment_failure",
     "classify_receivable",
     "diagnose_case",
+    "refresh_payment_diagnosis",
     "CohortAnomaly",
     "CohortRunResult",
     "CohortScanInput",

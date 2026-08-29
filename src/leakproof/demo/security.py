@@ -53,7 +53,12 @@ def _b64encode(value: bytes) -> str:
 
 
 def _b64decode(value: str) -> bytes:
-    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+    decoded = base64.b64decode(
+        value + "=" * (-len(value) % 4), altchars=b"-_", validate=True
+    )
+    if _b64encode(decoded) != value:
+        raise binascii.Error("non-canonical base64url encoding")
+    return decoded
 
 
 def issue_session_token(

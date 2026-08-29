@@ -15,6 +15,11 @@ class ProviderError(RuntimeError):
     message: str
     request_id: str | None = None
     status_code: int | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_paise: int = 0
+    latency_ms: int = 0
+    attempts: int = 1
 
     def __str__(self) -> str:
         return self.message
@@ -88,6 +93,17 @@ class CaseInsightRequest:
     aggregate_provider_fields: dict[str, str | int | float | bool | None]
 
 
+@dataclass(frozen=True)
+class CaseInsightResult:
+    insight: CaseInsight
+    request_id: str | None
+    input_tokens: int
+    output_tokens: int
+    cost_paise: int
+    latency_ms: int
+    attempts: int = 1
+
+
 @runtime_checkable
 class CaseInsightProvider(Protocol):
-    def explain_case(self, request: CaseInsightRequest) -> CaseInsight: ...
+    def explain_case(self, request: CaseInsightRequest) -> CaseInsightResult: ...

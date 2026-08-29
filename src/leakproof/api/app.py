@@ -28,6 +28,7 @@ from leakproof.demo import (
     RecoveryBootstrap,
     ResendWebhookEnvelope,
 )
+from leakproof.demo.projection import get_demo_session_projection
 from leakproof.demo.rate_limit import RateLimitUnavailable
 from leakproof.demo.service import (
     DemoRateLimitExceeded,
@@ -488,21 +489,26 @@ def recovery_route(
 @app.get(
     "/demo/sessions/{session_id}",
     response_model=DemoSessionProjection,
-    responses={401: {"model": APIError}, 503: {"model": APIError}},
+    responses={401: {"model": APIError}, 410: {"model": APIError}},
 )
-def demo_session_projection_skeleton(
+def demo_session_projection(
     session_id: str,
+    session: SessionDep,
     x_leakproof_session_token: str = Header(default=""),
-) -> JSONResponse:
-    del session_id
+) -> DemoSessionProjection | JSONResponse:
     if not x_leakproof_session_token:
         return contract_error(401, "session_token_required", "session token is required")
-    return contract_error(
-        503,
-        "integration_not_ready",
-        "Live session projection is not available until session creation is implemented",
-        retryable=True,
-    )
+    try:
+        return get_demo_session_projection(
+            session,
+            session_id,
+            session_token=x_leakproof_session_token,
+            settings=get_settings(),
+        )
+    except DemoSessionUnauthorized:
+        return contract_error(401, "invalid_session_token", "invalid session token")
+    except DemoSessionExpired:
+        return contract_error(410, "session_expired", "demo session has expired")
 
 
 @app.get("/cases", response_model=CaseListView)

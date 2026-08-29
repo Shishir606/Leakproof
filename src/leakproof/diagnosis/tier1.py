@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict
@@ -13,7 +14,7 @@ from leakproof.config import (
     ReceivableRuleConfig,
     get_policy_config,
 )
-from leakproof.models.db import Diagnosis, Event, RecoveryCase
+from leakproof.models.db import CaseInsightRecord, Diagnosis, Event, RecoveryCase
 from leakproof.models.domain import CaseState, LeakType
 
 
@@ -166,5 +167,40 @@ def diagnose_case(session: Session, case_id: str) -> Diagnosis:
         actor="tier1",
     )
     case.state = CaseState.DIAGNOSED.value
+    session.flush()
+    return diagnosis
+
+
+def refresh_payment_diagnosis(
+    session: Session, case: RecoveryCase, evidence: dict[str, Any]
+) -> Diagnosis | None:
+    """Replace an abandonment diagnosis when authoritative payment failure arrives later."""
+    diagnosis = session.get(Diagnosis, case.id)
+    if diagnosis is None:
+        return None
+    result = classify_payment_failure(evidence)
+    diagnosis.failure_class = result.failure_class
+    diagnosis.confidence = result.confidence
+    diagnosis.evidence = result.evidence
+    diagnosis.rule_id = result.rule_id
+    diagnosis.diagnosed_at = datetime.now(UTC)
+    append_event(
+        session,
+        case,
+        kind="DIAGNOSED",
+        payload={**result.model_dump(mode="json"), "reason": "payment_failure_precedence"},
+        actor="tier1",
+    )
+    case.state = CaseState.DIAGNOSED.value
+    insight = session.get(CaseInsightRecord, case.id)
+    if insight is not None:
+        insight.summary = None
+        insight.probable_cause = None
+        insight.evidence = []
+        insight.recommended_next_step = None
+        insight.confidence = None
+        insight.status = "pending"
+        insight.fallback_reason = None
+        insight.updated_at = datetime.now(UTC)
     session.flush()
     return diagnosis

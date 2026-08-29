@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     razorpay_webhook_secret: str = ""
     openai_api_key: str = ""
     openai_model: Literal["gpt-5.6-luna"] = "gpt-5.6-luna"
+    openai_usd_to_inr: float = Field(default=100.0, gt=0)
     resend_api_key: str = ""
     resend_webhook_secret: str = ""
     resend_from_email: str = ""

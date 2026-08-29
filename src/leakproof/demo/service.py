@@ -593,6 +593,7 @@ def materialize_checkout_abandonment(
         currency=demo.currency,
         evidence={
             "source": "browser_telemetry",
+            "error_reason": "checkout_abandoned",
             "session_id": demo.id,
             "dismissal_event_id": dismissal.id,
             "dismissed_at": _as_utc(dismissal.received_at).isoformat(),
