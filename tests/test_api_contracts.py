@@ -57,15 +57,24 @@ def test_live_demo_settings_require_current_razorpay_boundary():
         Settings(_env_file=None, mode="live_demo")
 
 
-def test_live_demo_does_not_require_future_openai_and_resend_slices():
+def test_final_live_demo_requires_enabled_provider_configuration():
+    with pytest.raises(ValidationError, match="openai_api_key"):
+        live_settings(openai_api_key="")
+    with pytest.raises(ValidationError, match="resend_api_key"):
+        live_settings(resend_api_key="")
+
+
+def test_provider_kill_switches_allow_safe_fallback_configuration():
     settings = live_settings(
         openai_api_key="",
         resend_api_key="",
-        resend_webhook_secret="",
         resend_from_email="",
+        luna_enabled=False,
+        outbound_email_enabled=False,
     )
 
-    assert settings.mode == "live_demo"
+    assert settings.luna_enabled is False
+    assert settings.outbound_email_enabled is False
 
 
 def test_live_demo_rejects_non_test_razorpay_keys():

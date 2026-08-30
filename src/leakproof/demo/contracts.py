@@ -212,6 +212,50 @@ class DemoSessionProjection(StrictContract):
     metrics: OperationalMetrics
 
 
+class AcceptanceSessionSummary(StrictContract):
+    state: DemoSessionState
+    amount_paise: int = Field(gt=0)
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    email_mode: EmailMode
+
+
+class AcceptanceCaseSummary(StrictContract):
+    leak_type: Literal["PAYMENT_FAILURE", "CHECKOUT_ABANDON"]
+    state: str
+    deterministic_diagnosis_ready: bool
+    insight_status: Literal["pending", "succeeded", "fallback"]
+
+
+class AcceptanceProviderStatus(StrictContract):
+    provider: Literal["razorpay", "openai", "resend"]
+    operation: str
+    status: str
+    latency_ms: int | None = Field(default=None, ge=0)
+    attempts: int | None = Field(default=None, ge=1)
+    error_class: str | None = None
+
+
+class AcceptanceCheck(StrictContract):
+    check: str
+    passed: bool
+    severity: Literal["blocking", "advisory"]
+    detail: str
+
+
+class DemoAcceptanceExport(StrictContract):
+    """Sanitized, credential-free evidence captured during the release rehearsal."""
+
+    schema_version: Literal["2026-09-04"] = "2026-09-04"
+    exported_at: datetime
+    passed: bool
+    session: AcceptanceSessionSummary
+    case: AcceptanceCaseSummary | None = None
+    operational_metrics: OperationalMetrics
+    provider_statuses: list[AcceptanceProviderStatus] = Field(default_factory=list)
+    timeline: list[TimelineItem] = Field(default_factory=list)
+    checks: list[AcceptanceCheck] = Field(default_factory=list)
+
+
 class APIErrorDetail(StrictContract):
     code: str = Field(pattern=r"^[a-z0-9_]+$")
     message: str

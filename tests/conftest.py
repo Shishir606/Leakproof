@@ -15,6 +15,10 @@ os.environ.setdefault("LEAKPROOF_RAZORPAY_WEBHOOK_SECRET", "test-secret")
 os.environ["LEAKPROOF_MODE"] = "simulation"
 os.environ["LEAKPROOF_RAZORPAY_KEY_ID"] = ""
 os.environ["LEAKPROOF_RAZORPAY_KEY_SECRET"] = ""
+os.environ["LEAKPROOF_OPENAI_API_KEY"] = ""
+os.environ["LEAKPROOF_RESEND_API_KEY"] = ""
+os.environ["LEAKPROOF_RESEND_WEBHOOK_SECRET"] = ""
+os.environ["LEAKPROOF_RESEND_FROM_EMAIL"] = ""
 
 from leakproof.api.app import app  # noqa: E402
 from leakproof.db import Base, get_session  # noqa: E402

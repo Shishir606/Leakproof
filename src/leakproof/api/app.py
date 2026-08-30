@@ -21,6 +21,7 @@ from leakproof.demo import (
     APIErrorDetail,
     CheckoutEventReceipt,
     CheckoutEventRequest,
+    DemoAcceptanceExport,
     DemoSessionCreated,
     DemoSessionCreateRequest,
     DemoSessionProjection,
@@ -28,6 +29,7 @@ from leakproof.demo import (
     RecoveryBootstrap,
     ResendWebhookEnvelope,
 )
+from leakproof.demo.acceptance import build_demo_acceptance_export
 from leakproof.demo.projection import get_demo_session_projection
 from leakproof.demo.rate_limit import RateLimitUnavailable
 from leakproof.demo.service import (
@@ -378,6 +380,13 @@ def create_demo_session_route(
     limiter: DemoRateLimiterDep,
 ) -> DemoSessionCreated | JSONResponse:
     settings = get_settings()
+    if not settings.demo_sessions_enabled:
+        return contract_error(
+            503,
+            "demo_sessions_disabled",
+            "new demo sessions are temporarily disabled",
+            retryable=True,
+        )
     client_ip = request.client.host if request.client is not None else "unknown"
     try:
         return create_demo_session(
@@ -536,6 +545,31 @@ def demo_session_projection(
         return contract_error(401, "session_token_required", "session token is required")
     try:
         return get_demo_session_projection(
+            session,
+            session_id,
+            session_token=x_leakproof_session_token,
+            settings=get_settings(),
+        )
+    except DemoSessionUnauthorized:
+        return contract_error(401, "invalid_session_token", "invalid session token")
+    except DemoSessionExpired:
+        return contract_error(410, "session_expired", "demo session has expired")
+
+
+@app.get(
+    "/demo/sessions/{session_id}/acceptance.json",
+    response_model=DemoAcceptanceExport,
+    responses={401: {"model": APIError}, 410: {"model": APIError}},
+)
+def demo_session_acceptance_export(
+    session_id: str,
+    session: SessionDep,
+    x_leakproof_session_token: str = Header(default=""),
+) -> DemoAcceptanceExport | JSONResponse:
+    if not x_leakproof_session_token:
+        return contract_error(401, "session_token_required", "session token is required")
+    try:
+        return build_demo_acceptance_export(
             session,
             session_id,
             session_token=x_leakproof_session_token,

@@ -217,6 +217,9 @@ def execute_demo_recovery_email(
         session.commit()
         return EmailExecutionResult(action.id, "cancelled")
 
+    if not settings.outbound_email_enabled:
+        return _preview(session, action, demo, status="preview_only", now=attempted_at)
+
     # No recipient data is decrypted for preview-only sessions.
     if not demo.recipient_ciphertext or not demo.recipient_hash:
         return _preview(session, action, demo, status="preview_only", now=attempted_at)

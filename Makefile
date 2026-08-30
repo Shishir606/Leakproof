@@ -1,4 +1,4 @@
-.PHONY: install lint test test-august-27 test-august-28 test-august-29 test-api-august-29 test-api-august-30 test-api-august-31 test-api-september-1 test-api-september-2 test-api-september-3 test-august-30 test-august-31 test-september-1 test-september-2 test-september-3 test-september-4 evals dashboard batch build up down migrate demo-webhook verify-foundation seed tunnel
+.PHONY: install lint test test-august-27 test-august-28 test-august-29 test-api-august-29 test-api-august-30 test-api-august-31 test-api-september-1 test-api-september-2 test-api-september-3 test-api-september-4 test-august-30 test-august-31 test-september-1 test-september-2 test-september-3 test-september-4 evals dashboard batch build up down migrate demo-webhook verify-foundation seed tunnel
 
 install:
 	uv sync --extra dev
@@ -36,6 +36,11 @@ test-api-september-2:
 
 test-api-september-3:
 	uv run pytest tests/test_api_contracts.py tests/test_api_august_30.py tests/test_api_august_31.py tests/test_api_september_1.py tests/test_api_september_2.py tests/test_api_september_3.py tests/test_webhooks.py
+	npm --prefix dashboard run check
+	npm --prefix dashboard run build
+
+test-api-september-4:
+	uv run pytest tests/test_api_contracts.py tests/test_api_august_30.py tests/test_api_august_31.py tests/test_api_september_1.py tests/test_api_september_2.py tests/test_api_september_3.py tests/test_api_september_4.py tests/test_webhooks.py
 	npm --prefix dashboard run check
 	npm --prefix dashboard run build
 

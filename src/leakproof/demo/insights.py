@@ -213,6 +213,26 @@ def generate_case_insight(
         return record
 
     request = build_case_insight_request(case, diagnosis)
+    if not settings.luna_enabled:
+        return _finish(
+            session,
+            case=case,
+            diagnosis=diagnosis,
+            record=record,
+            insight=_fallback_insight(request, float(diagnosis.confidence)),
+            status="fallback",
+            fallback_reason="disabled",
+            model="disabled",
+            request_id=None,
+            input_tokens=0,
+            output_tokens=0,
+            cost_paise=0,
+            latency_ms=0,
+            attempts=1,
+            schema_ok=False,
+            provider_status="disabled",
+            request=request,
+        )
     config = get_policy_config(str(settings.config_dir))
     spent = int(
         session.scalar(

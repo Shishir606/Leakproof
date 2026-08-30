@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     demo_sessions_per_ip_hour: int = Field(default=10, ge=1, le=100)
     demo_checkout_events_per_session: int = Field(default=100, ge=4, le=1_000)
     demo_abandonment_delay_seconds: int = Field(default=30, ge=1, le=300)
+    demo_sessions_enabled: bool = True
+    luna_enabled: bool = True
+    outbound_email_enabled: bool = True
     resend_daily_limit: int = Field(default=100, gt=0)
     resend_monthly_limit: int = Field(default=3_000, gt=0)
 
@@ -63,9 +66,18 @@ class Settings(BaseSettings):
                 "razorpay_key_id",
                 "razorpay_key_secret",
                 "razorpay_webhook_secret",
+                "resend_webhook_secret",
             )
             if not getattr(self, name).strip()
         ]
+        if self.luna_enabled and not self.openai_api_key.strip():
+            missing.append("openai_api_key")
+        if self.outbound_email_enabled:
+            missing.extend(
+                name
+                for name in ("resend_api_key", "resend_from_email")
+                if not getattr(self, name).strip()
+            )
         if missing:
             raise ValueError(
                 "live_demo configuration is incomplete: " + ", ".join(sorted(missing))

@@ -99,7 +99,7 @@ Postgres and Redis remain separate infrastructure containers. The Next.js dashbo
 at `http://localhost:3000` and reads the same API data used by the acceptance tests. Beat also rescans the durable inbox
 every minute, so a webhook committed during a temporary broker outage is not lost.
 
-The public recovery API is implemented through the 3 September checkpoint. Razorpay failure and
+The public recovery API is implemented through the 4 September checkpoint. Razorpay failure and
 success webhooks bind to the original demo order, failure replaces abandonment without creating a
 second case, and either success event closes that case while cancelling pending actions. Recovery
 links use signed 30-minute tokens bound to session, merchant, order, amount, and currency; the
@@ -132,6 +132,16 @@ actions, provider receipts, verified recovered amount, latency, failures, and Lu
 treatment-versus-holdout dashboard now lives at `/scenario-lab` behind an explicit synthetic-only
 banner; no simulator fields enter the live projection. Run the integrated API and production UI
 checkpoint with `make test-api-september-3`.
+
+The 4 September checkpoint adds a token-protected, sanitized acceptance export and a repeatable
+capture command for the two release rehearsals. The export contains blocking/advisory checks, the
+safe event timeline, safe provider status, and final operational metrics while omitting recipient,
+session/order/action/provider identifiers, browser attempt IDs, signed links, and tokens. It also
+adds release kill switches for new sessions, Luna, and outbound email; disabling enrichments keeps
+deterministic diagnosis and the customer-authorized recovery route available. Run the complete API
+checkpoint with `make test-api-september-4` and follow
+[`docs/API_RELEASE_RUNBOOK.md`](docs/API_RELEASE_RUNBOOK.md) for deployment, provider registration,
+credential ownership, two-path rehearsal, evidence capture, known exceptions, and rollback.
 
 `make verify-foundation` runs a fresh end-to-end check against the live API, Celery worker, and
 PostgreSQL. It sends three payment failures plus a duplicate, verifies that all three signals land
@@ -504,6 +514,7 @@ The tests demonstrate:
 - `POST /demo/sessions` — fixed Razorpay test order and signed Checkout session bootstrap
 - `POST /demo/sessions/{session_id}/checkout-events` — bounded, idempotent browser telemetry
 - `GET /demo/sessions/{session_id}` — sanitized live case, action, provider, timeline, and metrics projection
+- `GET /demo/sessions/{session_id}/acceptance.json` — token-protected sanitized release evidence and acceptance checks
 - `GET /recover/{signed_token}` — verified bootstrap for the original unpaid Razorpay order
 - `POST /webhooks/razorpay` — HMAC verification, durable inbox, dedupe, async enqueue
 - `POST /webhooks/resend` — raw-body signature verification and redacted delivery reconciliation
