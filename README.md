@@ -1,6 +1,6 @@
 # Leakproof
 
-**One recovery spine for five revenue-leak surfaces.**
+**One live provider-verified recovery loop; five simulated expansion surfaces.**
 
 This repository contains the August 25 foundation through the September 4 reproducible full-batch slice.
 A FastAPI receiver verifies Razorpay HMAC signatures, commits each raw webhook
@@ -10,6 +10,19 @@ and append-only event spine. PostgreSQL rejects updates and deletes against the 
 worker redelivery cannot append duplicate events or repeat an actuator call, and repeating a
 simulator seed cannot duplicate cases. A ten-minute aggregate cohort scan detects qualified
 issuer incidents without sending customer or entity identifiers to the model.
+
+## Capability and provenance contract
+
+These API and dashboard labels are not interchangeable.
+
+| Label | What is shipped | What it does not claim |
+|---|---|---|
+| `LIVE_PROVIDER_VERIFIED` | One Razorpay test-mode recovery loop covering payment failure and checkout abandonment, closed only by a provider success webhook | Live invoice, subscription, mandate, voice, or autonomous money movement |
+| `SIMULATED_END_TO_END` | Scenario Lab coverage for payment failure, checkout abandonment, invoice overdue, subscription halt, and mandate broken | Realized merchant revenue or provider-verified recovery |
+| `ARCHITECTURE_READY` | Bounded voice/promise and provider-adapter boundaries without a connected live provider | A live customer-contact integration |
+
+`GET /capabilities` publishes the same safe matrix. Scenario Lab rejects anything other than
+`SIMULATED_END_TO_END`; Live Demo rejects anything other than `LIVE_PROVIDER_VERIFIED`.
 
 ```text
 Razorpay webhook                                  Fixed-seed merchant simulator
@@ -68,6 +81,7 @@ Docker Desktop must be running.
 
 ```bash
 cp .env.example .env
+# Set LEAKPROOF_OPERATOR_API_TOKEN to: openssl rand -base64 32
 make up
 curl http://localhost:8000/health/ready
 make demo-webhook
@@ -90,6 +104,7 @@ make test-september-3
 make test-september-4
 make batch
 make evals
+make release-gate
 ```
 
 The `make up` path builds one `leakproof-app:latest` application image, starts Postgres and Redis,
@@ -98,6 +113,14 @@ worker, and Celery Beat. The migration job and all three application services re
 Postgres and Redis remain separate infrastructure containers. The Next.js dashboard is available
 at `http://localhost:3000` and reads the same API data used by the acceptance tests. Beat also rescans the durable inbox
 every minute, so a webhook committed during a temporary broker outage is not lost.
+
+The operational API (`/cases`, scoreboards, evaluations, costs, suppressions, batch execution,
+voice turns, replay, and detailed audit) requires the server-side operator bearer credential and
+derives merchant scope from `LEAKPROOF_OPERATOR_MERCHANT_IDS`. Out-of-scope object reads return
+`404`; scoped collections omit other merchants. The public dashboard keeps Case Timeline disabled
+unless `LEAKPROOF_OPERATOR_UI_ENABLED=true` on a separately protected operator surface. The token
+is attached only by Next.js server code and is never returned to the browser. Production must
+replace this buildathon boundary with merchant identity plus OAuth/RBAC.
 
 The public recovery API is implemented through the 4 September checkpoint. Razorpay failure and
 success webhooks bind to the original demo order, failure replaces abandonment without creating a
@@ -143,10 +166,16 @@ checkpoint with `make test-api-september-4` and follow
 [`docs/API_RELEASE_RUNBOOK.md`](docs/API_RELEASE_RUNBOOK.md) for deployment, provider registration,
 credential ownership, two-path rehearsal, evidence capture, known exceptions, and rollback.
 
-`make verify-foundation` runs a fresh end-to-end check against the live API, Celery worker, and
-PostgreSQL. It sends three payment failures plus a duplicate, verifies that all three signals land
-on one replayable case, confirms the applied migration, and proves PostgreSQL rejects both updates
-and deletes against its audit timeline.
+`make verify-foundation` runs an end-to-end check against the API, Celery worker, and PostgreSQL. It
+waits independently for three distinct processed inbox rows, verifies the semantic sequence
+`DETECTED → ASSIGNED → SIGNAL → SIGNAL` on one replayable case, confirms the applied migration, and
+proves PostgreSQL rejects both updates and deletes against its audit timeline. Timeout output
+includes inbox/processed counts, event kinds, attempts, and redacted error summaries.
+
+`make release-gate` is the single fail-fast submission command. It runs lint, the full Python suite
+with an 85% coverage floor, dashboard typecheck and production build, foundation verification twice
+against the reused database, evaluation gates, focused API-security tests, and acceptance artifact
+schema/redaction tests.
 
 ## August 26: synthetic merchant simulator
 
@@ -518,19 +547,20 @@ The tests demonstrate:
 - `GET /recover/{signed_token}` — verified bootstrap for the original unpaid Razorpay order
 - `POST /webhooks/razorpay` — HMAC verification, durable inbox, dedupe, async enqueue
 - `POST /webhooks/resend` — raw-body signature verification and redacted delivery reconciliation
-- `POST /batch/run` — execute or idempotently replay the full synthetic batch
-- `GET /cases?state=&leak_type=` — filterable case index for the timeline
-- `GET /cases/{case_id}` — case, diagnosis, action ladder, attribution, and audit timeline
-- `POST /actions/{action_id}/voice/turns` — idempotent simulated voice turn and bounded reply
-- `GET /cases/{case_id}/audit.json` — exportable append-only audit record
-- `GET /cases/{case_id}/replay` — stored projection, ordered events, replayed state
-- `GET /suppressions` — currently open circuit breakers
-- `POST /suppressions/{id}/close` — human circuit-breaker override
-- `GET /costs` — LLM token, cost, latency, and schema-success rollup
-- `GET /scoreboard/{run_id}` — holdout lift, incremental recovery, cost, and safety metrics
-- `GET /scoreboard/latest` — most recent measured batch for the dashboard
-- `GET /scoreboard/{run_id}/exceptions` — grouped reasons plus every non-recovered case
-- `GET /evals/latest` — latest cohort and injection metrics with pass/fail gates
+- `GET /capabilities` — public capability/provenance matrix without merchant data
+- `POST /batch/run` — operator-only execution or replay of the synthetic batch
+- `GET /cases?state=&leak_type=` — operator-only, merchant-scoped case index
+- `GET /cases/{case_id}` — operator-only case detail and audit timeline
+- `POST /actions/{action_id}/voice/turns` — operator-only bounded simulated voice turn
+- `GET /cases/{case_id}/audit.json` — operator-only append-only audit export
+- `GET /cases/{case_id}/replay` — operator-only projection-integrity replay
+- `GET /suppressions` — operator-only, merchant-scoped circuit breakers
+- `POST /suppressions/{id}/close` — operator-only circuit-breaker override
+- `GET /costs` — operator-only, merchant-scoped model cost rollup
+- `GET /scoreboard/{run_id}` — operator-only, merchant-scoped synthetic metrics
+- `GET /scoreboard/latest` — operator-only latest permitted synthetic batch
+- `GET /scoreboard/{run_id}/exceptions` — operator-only batch exceptions
+- `GET /evals/latest` — operator-only evaluation metrics with pass/fail gates
 - `GET /health/live` and `GET /health/ready` — process and database health
 
 Raw money values are paise (`BIGINT`) and timestamps are timezone-aware. Actuator calls and the

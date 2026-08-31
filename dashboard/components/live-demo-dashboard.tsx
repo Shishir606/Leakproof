@@ -100,6 +100,12 @@ export function LiveDemoDashboard() {
       try {
         const next = await getSessionProjection(session);
         if (cancelled) return;
+        if (next.data_provenance !== "LIVE_PROVIDER_VERIFIED") {
+          throw new DemoApiError(
+            `Live Demo rejected ${next.data_provenance} data. Use Scenario Lab for simulated results.`,
+            "provenance_mismatch",
+          );
+        }
         setProjection(next);
         setError(null);
         const unexpired = new Date(next.expires_at).getTime() > Date.now();

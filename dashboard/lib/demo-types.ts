@@ -73,6 +73,7 @@ export type TimelineItem = {
 };
 
 export type DemoSessionProjection = {
+  data_provenance: "LIVE_PROVIDER_VERIFIED" | "SIMULATED_END_TO_END" | "ARCHITECTURE_READY";
   session_id: string;
   state: DemoSessionState;
   amount_paise: number;

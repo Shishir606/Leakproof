@@ -1,6 +1,9 @@
+import "server-only";
+
 import type { CaseDetail, CaseList, ExceptionReport, LatestEvals, Scoreboard } from "./types";
 
 const API_BASE_URL = (process.env.API_BASE_URL ?? "http://localhost:8000").replace(/\/$/, "");
+const OPERATOR_API_TOKEN = process.env.LEAKPROOF_OPERATOR_API_TOKEN ?? "";
 
 export class ApiError extends Error {
   constructor(
@@ -14,7 +17,9 @@ export class ApiError extends Error {
 async function apiGet<T>(path: string): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, { cache: "no-store" });
+    const headers = new Headers({ accept: "application/json" });
+    if (OPERATOR_API_TOKEN) headers.set("authorization", `Bearer ${OPERATOR_API_TOKEN}`);
+    response = await fetch(`${API_BASE_URL}${path}`, { headers, cache: "no-store" });
   } catch {
     throw new ApiError(`Cannot reach the Leakproof API at ${API_BASE_URL}.`);
   }

@@ -12,6 +12,7 @@ from leakproof.models.db import (
     BatchRun,
     Contact,
     Event,
+    Merchant,
     RecoveryAttribution,
 )
 from leakproof.models.domain import Arm, CaseOutcome, LeakType
@@ -225,6 +226,7 @@ def test_scoreboard_computes_lift_incremental_recovery_cost_and_api(
         config = get_measurement_config()
         # record_signal creates the merchant before the run's foreign key is inserted.
         first, _ = record_signal(session, _signal("score_0", amount=100_000, run_id=run_id))
+        session.get(Merchant, first.merchant_id).policy = {"synthetic": True}
         session.add(
             BatchRun(
                 id=run_id,

@@ -120,6 +120,7 @@ def build_demo_acceptance_export(
     ]
     blocking_passed = all(item.passed for item in checks if item.severity == "blocking")
     return DemoAcceptanceExport(
+        data_provenance=projection.data_provenance,
         exported_at=exported_at,
         passed=blocking_passed,
         session=AcceptanceSessionSummary(

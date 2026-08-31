@@ -1,4 +1,4 @@
-.PHONY: install lint test test-august-27 test-august-28 test-august-29 test-api-august-29 test-api-august-30 test-api-august-31 test-api-september-1 test-api-september-2 test-api-september-3 test-api-september-4 test-august-30 test-august-31 test-september-1 test-september-2 test-september-3 test-september-4 evals dashboard batch build up down migrate demo-webhook verify-foundation seed tunnel
+.PHONY: install lint test test-coverage dashboard-check eval-gates security-tests acceptance-tests release-gate test-august-27 test-august-28 test-august-29 test-api-august-29 test-api-august-30 test-api-august-31 test-api-september-1 test-api-september-2 test-api-september-3 test-api-september-4 test-august-30 test-august-31 test-september-1 test-september-2 test-september-3 test-september-4 evals dashboard batch build up down migrate demo-webhook verify-foundation seed tunnel
 
 install:
 	uv sync --extra dev
@@ -9,6 +9,32 @@ lint:
 
 test:
 	uv run pytest
+
+test-coverage:
+	uv run pytest --cov=leakproof --cov-report=term-missing --cov-fail-under=85
+
+dashboard-check:
+	npm --prefix dashboard run check
+	npm --prefix dashboard run build
+
+eval-gates:
+	LEAKPROOF_DATABASE_URL=postgresql+psycopg://leakproof:leakproof@localhost:55432/leakproof uv run python scripts/run_evals.py --report /tmp/leakproof-release-gate-evals.json
+
+security-tests:
+	uv run pytest tests/test_api_security.py
+
+acceptance-tests:
+	uv run pytest tests/test_api_september_4.py tests/test_foundation_verifier.py
+
+release-gate:
+	$(MAKE) lint
+	$(MAKE) test-coverage
+	$(MAKE) dashboard-check
+	$(MAKE) verify-foundation
+	$(MAKE) verify-foundation
+	$(MAKE) eval-gates
+	$(MAKE) security-tests
+	$(MAKE) acceptance-tests
 
 test-august-27:
 	uv run pytest tests/test_diagnosis.py tests/test_guardrails.py tests/test_templates.py

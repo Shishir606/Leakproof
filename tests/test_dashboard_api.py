@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 from leakproof.config import get_measurement_config
 from leakproof.diagnosis import diagnose_case
-from leakproof.models.db import BatchRun
+from leakproof.models.db import BatchRun, Merchant
 from leakproof.models.domain import Arm, LeakType
 from leakproof.policy import plan_case
 from leakproof.services import NormalizedSignal, record_signal
@@ -47,6 +47,7 @@ def _dashboard_case(session):
         )
     )
     case.arm = Arm.TREATMENT.value
+    session.get(Merchant, case.merchant_id).policy = {"synthetic": True}
     diagnose_case(session, case.id)
     plan_case(session, case.id, now=NOW)
     session.commit()
@@ -115,6 +116,7 @@ def test_latest_scoreboard_drives_recordable_dashboard(client, session_factory):
     assert response.status_code == 200
     payload = response.json()
     assert payload["run_id"] == "run_dashboard"
+    assert payload["data_provenance"] == "SIMULATED_END_TO_END"
     assert payload["cases_processed"] == 1
     assert payload["cases_by_leak_type"] == {"PAYMENT_FAILURE": 1}
 

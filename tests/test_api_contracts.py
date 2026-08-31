@@ -33,6 +33,8 @@ def live_settings(**overrides: object) -> Settings:
         "mode": "live_demo",
         "public_base_url": "https://demo.example.com",
         "recovery_token_secret": "a" * 32,
+        "operator_api_token": "operator-secret-that-is-at-least-32-bytes",
+        "operator_merchant_ids": "merchant_demo",
         "razorpay_key_id": "rzp_test_contract",
         "razorpay_key_secret": "razorpay-secret",
         "razorpay_webhook_secret": "razorpay-webhook-secret",
@@ -91,6 +93,13 @@ def test_live_demo_accepts_safe_configuration_and_normalizes_allowlist():
         "reviewer@example.com",
         "second@example.com",
     }
+
+
+def test_live_demo_requires_a_bounded_32_byte_operator_boundary():
+    with pytest.raises(ValidationError, match="32 random bytes"):
+        live_settings(operator_api_token="too-short")
+    with pytest.raises(ValidationError, match="cannot use a wildcard"):
+        live_settings(operator_merchant_ids="*")
 
 
 def test_live_case_key_is_shared_by_abandonment_and_failure_pipeline():

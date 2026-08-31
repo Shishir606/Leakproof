@@ -19,6 +19,7 @@ from leakproof.models.db import (
     RecoveryCase,
 )
 from leakproof.models.domain import Arm, CaseOutcome, CaseState
+from leakproof.provenance import DataProvenance
 
 
 class ArmMetrics(BaseModel):
@@ -35,6 +36,7 @@ class Scoreboard(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     run_id: str
+    data_provenance: DataProvenance
     merchant_id: str
     synthetic: bool
     started_at: datetime
@@ -189,10 +191,16 @@ def compute_scoreboard(session: Session, run_id: str) -> Scoreboard:
     incremental = gross - counterfactual
     total_cost = action_cost + llm_cost
     merchant = session.get(Merchant, run.merchant_id)
+    synthetic = bool(merchant and (merchant.policy or {}).get("synthetic", False))
     return Scoreboard(
         run_id=run.id,
+        data_provenance=(
+            DataProvenance.SIMULATED_END_TO_END
+            if synthetic
+            else DataProvenance.ARCHITECTURE_READY
+        ),
         merchant_id=run.merchant_id,
-        synthetic=bool(merchant and (merchant.policy or {}).get("synthetic", False)),
+        synthetic=synthetic,
         started_at=started_at,
         completed_at=completed_at,
         duration_seconds=duration_seconds,

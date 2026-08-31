@@ -17,7 +17,10 @@ artifacts.
 
 ## Preflight and release
 
-1. Copy `.env.example` into the deployment secret workflow and set every live-demo value. Keep
+1. Copy `.env.example` into the deployment secret workflow and set every live-demo value. Generate
+   `LEAKPROOF_OPERATOR_API_TOKEN` from at least 32 random bytes, scope
+   `LEAKPROOF_OPERATOR_MERCHANT_IDS` to the demo merchant, and keep
+   `LEAKPROOF_OPERATOR_UI_ENABLED=false` on the public dashboard. Keep
    `LEAKPROOF_MODE=simulation` for the first boot.
 2. Confirm `LEAKPROOF_RAZORPAY_KEY_ID` begins with `rzp_test_`. The application rejects live keys.
 3. Deploy the release candidate, apply `alembic upgrade head`, and check `GET /health/live` and
@@ -32,7 +35,10 @@ artifacts.
 5. Switch only the demo deployment to `LEAKPROOF_MODE=live_demo` and restart the API, worker, and
    scheduler. A startup failure means the enabled provider configuration is incomplete; do not
    bypass it.
-6. Run `make test-api-september-4` against the release commit before opening public navigation.
+6. Confirm anonymous/invalid bearer requests to `/cases`, `/scoreboard/latest`, `/evals/latest`,
+   `/costs`, and `/suppressions` return `401`, and a valid credential cannot read another
+   merchant's case. Production identity must replace this buildathon token boundary.
+7. Run `make release-gate` against the release commit before opening public navigation.
 
 ## Rehearsal
 

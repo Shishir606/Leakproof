@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { ArrowIcon, ShieldIcon } from "@/components/icons";
 import { EmptyState, Shell } from "@/components/shell";
 import { ApiError, getCase, getCases } from "@/lib/api";
@@ -108,6 +109,7 @@ function CaseInspector({ detail }: { detail: CaseDetail }) {
 }
 
 export default async function CasesPage({ searchParams }: { searchParams: Promise<Search> }) {
+  if (process.env.LEAKPROOF_OPERATOR_UI_ENABLED !== "true") notFound();
   const query = await searchParams;
   const filters = {
     state: first(query.state),

@@ -8,6 +8,8 @@ x-app: &app
   environment:
     LEAKPROOF_DATABASE_URL: postgresql+psycopg://leakproof:leakproof@postgres:5432/leakproof
     LEAKPROOF_REDIS_URL: redis://redis:6379/0
+    LEAKPROOF_OPERATOR_API_TOKEN: ${LEAKPROOF_OPERATOR_API_TOKEN:-}
+    LEAKPROOF_OPERATOR_MERCHANT_IDS: ${LEAKPROOF_OPERATOR_MERCHANT_IDS:-merchant_demo}
   volumes:
     - ./config:/app/config:ro
   depends_on:
@@ -74,6 +76,8 @@ services:
     environment:
       API_BASE_URL: http://api:8000
       HOSTNAME: 0.0.0.0
+      LEAKPROOF_OPERATOR_API_TOKEN: ${LEAKPROOF_OPERATOR_API_TOKEN:-}
+      LEAKPROOF_OPERATOR_UI_ENABLED: ${LEAKPROOF_OPERATOR_UI_ENABLED:-false}
     ports:
       - "3000:3000"
     depends_on:

@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     mode: Literal["simulation", "live_demo"] = "simulation"
     config_dir: Path = Path("config")
 
+    operator_api_token: str = ""
+    operator_merchant_ids: str = ""
+
     public_base_url: str = ""
     recovery_token_secret: str = ""
     razorpay_key_id: str = ""
@@ -53,6 +56,15 @@ class Settings(BaseSettings):
             if email.strip()
         )
 
+    @property
+    def operator_merchant_scope(self) -> frozenset[str]:
+        configured = frozenset(
+            merchant_id.strip()
+            for merchant_id in self.operator_merchant_ids.split(",")
+            if merchant_id.strip()
+        )
+        return configured or frozenset({self.default_merchant_id})
+
     @model_validator(mode="after")
     def validate_live_demo_readiness(self) -> Settings:
         if self.mode == "simulation":
@@ -62,6 +74,7 @@ class Settings(BaseSettings):
             name
             for name in (
                 "public_base_url",
+                "operator_api_token",
                 "recovery_token_secret",
                 "razorpay_key_id",
                 "razorpay_key_secret",
@@ -90,6 +103,10 @@ class Settings(BaseSettings):
             raise ValueError("live_demo requires a Razorpay test-mode key beginning with rzp_test_")
         if len(self.recovery_token_secret) < 32:
             raise ValueError("LEAKPROOF_RECOVERY_TOKEN_SECRET must contain at least 32 characters")
+        if len(self.operator_api_token.encode("utf-8")) < 32:
+            raise ValueError("LEAKPROOF_OPERATOR_API_TOKEN must contain at least 32 random bytes")
+        if "*" in self.operator_merchant_scope:
+            raise ValueError("live_demo operator merchant scope cannot use a wildcard")
         if self.resend_from_email and "@" not in self.resend_from_email:
             raise ValueError("LEAKPROOF_RESEND_FROM_EMAIL must be an email address")
         if self.resend_monthly_limit < self.resend_daily_limit:

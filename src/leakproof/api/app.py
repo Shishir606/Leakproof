@@ -11,6 +11,7 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
+from leakproof.api.auth import OperatorPrincipal, get_operator_principal
 from leakproof.audit.timeline import replay_case
 from leakproof.batch import BatchResult, run_full_batch
 from leakproof.celery_app import check_demo_abandonment, process_webhook
@@ -57,6 +58,7 @@ from leakproof.models.db import (
     Suppression,
 )
 from leakproof.models.domain import CaseState, LeakType, ReplayedCase
+from leakproof.provenance import DataProvenance
 from leakproof.providers import PaymentProvider, ProviderError
 from leakproof.providers.factory import get_demo_rate_limiter, get_payment_provider
 from leakproof.sensors.webhooks import (
@@ -82,12 +84,24 @@ app = FastAPI(title="Leakproof API", version="0.1.0", lifespan=lifespan)
 SessionDep = Annotated[Session, Depends(get_session)]
 PaymentProviderDep = Annotated[PaymentProvider, Depends(get_payment_provider)]
 DemoRateLimiterDep = Annotated[Any, Depends(get_demo_rate_limiter)]
+OperatorDep = Annotated[OperatorPrincipal, Depends(get_operator_principal)]
 
 
 class WebhookAccepted(BaseModel):
     accepted: bool = True
     duplicate: bool
     webhook_id: int
+
+
+class CapabilityView(BaseModel):
+    capability: str
+    data_provenance: DataProvenance
+    scope: list[str]
+
+
+class CapabilityContract(BaseModel):
+    headline: str
+    capabilities: list[CapabilityView]
 
 
 def contract_error(
@@ -259,6 +273,30 @@ def enqueue_webhook(webhook_id: int) -> None:
         logger.exception("webhook persisted; immediate enqueue failed", extra={"id": webhook_id})
 
 
+def _scoped_case(
+    session: Session, case_id: str, principal: OperatorPrincipal
+) -> RecoveryCase:
+    filters = [RecoveryCase.id == case_id]
+    if not principal.all_merchants:
+        filters.append(RecoveryCase.merchant_id.in_(principal.merchant_ids))
+    case = session.scalar(select(RecoveryCase).where(*filters))
+    if case is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    return case
+
+
+def _scoped_batch(
+    session: Session, run_id: str, principal: OperatorPrincipal
+) -> BatchRun:
+    filters = [BatchRun.id == run_id]
+    if not principal.all_merchants:
+        filters.append(BatchRun.merchant_id.in_(principal.merchant_ids))
+    run = session.scalar(select(BatchRun).where(*filters))
+    if run is None:
+        raise HTTPException(status_code=404, detail="batch run not found")
+    return run
+
+
 @app.get("/health/live")
 def live() -> dict[str, str]:
     return {"status": "ok"}
@@ -271,6 +309,36 @@ def ready(session: SessionDep) -> dict[str, str]:
     except Exception as exc:
         raise HTTPException(status_code=503, detail="database unavailable") from exc
     return {"status": "ready"}
+
+
+@app.get("/capabilities", response_model=CapabilityContract)
+def capabilities() -> CapabilityContract:
+    return CapabilityContract(
+        headline="one live recovery loop; five simulated expansion surfaces",
+        capabilities=[
+            CapabilityView(
+                capability="Razorpay recovery loop",
+                data_provenance=DataProvenance.LIVE_PROVIDER_VERIFIED,
+                scope=["payment failure", "checkout abandonment"],
+            ),
+            CapabilityView(
+                capability="Scenario Lab",
+                data_provenance=DataProvenance.SIMULATED_END_TO_END,
+                scope=[
+                    "payment failure",
+                    "checkout abandonment",
+                    "invoice overdue",
+                    "subscription halt",
+                    "mandate broken",
+                ],
+            ),
+            CapabilityView(
+                capability="voice/promise provider integration",
+                data_provenance=DataProvenance.ARCHITECTURE_READY,
+                scope=["bounded dialogue and promise capture"],
+            ),
+        ],
+    )
 
 
 @app.post(
@@ -584,6 +652,7 @@ def demo_session_acceptance_export(
 @app.get("/cases", response_model=CaseListView)
 def cases(
     session: SessionDep,
+    principal: OperatorDep,
     state_filter: Annotated[CaseState | None, Query(alias="state")] = None,
     leak_type: LeakType | None = None,
     batch_run_id: str | None = None,
@@ -591,6 +660,8 @@ def cases(
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> CaseListView:
     filters = []
+    if not principal.all_merchants:
+        filters.append(RecoveryCase.merchant_id.in_(principal.merchant_ids))
     if state_filter:
         filters.append(RecoveryCase.state == state_filter.value)
     if leak_type:
@@ -631,7 +702,8 @@ def cases(
 
 
 @app.get("/cases/{case_id}/replay", response_model=ReplayedCase)
-def case_replay(case_id: str, session: SessionDep) -> ReplayedCase:
+def case_replay(case_id: str, session: SessionDep, principal: OperatorDep) -> ReplayedCase:
+    _scoped_case(session, case_id, principal)
     try:
         return replay_case(session, case_id)
     except LookupError as exc:
@@ -639,7 +711,8 @@ def case_replay(case_id: str, session: SessionDep) -> ReplayedCase:
 
 
 @app.get("/cases/{case_id}/audit.json", response_model=ReplayedCase)
-def case_audit(case_id: str, session: SessionDep) -> ReplayedCase:
+def case_audit(case_id: str, session: SessionDep, principal: OperatorDep) -> ReplayedCase:
+    _scoped_case(session, case_id, principal)
     try:
         return replay_case(session, case_id)
     except LookupError as exc:
@@ -647,7 +720,8 @@ def case_audit(case_id: str, session: SessionDep) -> ReplayedCase:
 
 
 @app.get("/cases/{case_id}", response_model=CaseDetailView)
-def case_detail(case_id: str, session: SessionDep) -> CaseDetailView:
+def case_detail(case_id: str, session: SessionDep, principal: OperatorDep) -> CaseDetailView:
+    case_row = _scoped_case(session, case_id, principal)
     try:
         replay = replay_case(session, case_id)
     except LookupError as exc:
@@ -671,7 +745,7 @@ def case_detail(case_id: str, session: SessionDep) -> CaseDetailView:
     return CaseDetailView(
         case=CaseListItem(
             **CaseListItem.model_validate(
-                session.get(RecoveryCase, case_id), from_attributes=True
+                case_row, from_attributes=True
             ).model_dump(exclude={"event_count"}),
             event_count=len(replay.events),
         ),
@@ -696,7 +770,15 @@ def voice_turn(
     action_id: str,
     request: VoiceTurnRequest,
     session: SessionDep,
+    principal: OperatorDep,
 ) -> VoiceTurnView:
+    action_case = session.execute(
+        select(Action, RecoveryCase)
+        .join(RecoveryCase, RecoveryCase.id == Action.case_id)
+        .where(Action.id == action_id)
+    ).one_or_none()
+    if action_case is None or not principal.permits(action_case[1].merchant_id):
+        raise HTTPException(status_code=404, detail="action not found")
     try:
         reply = handle_voice_turn(
             session,
@@ -724,19 +806,24 @@ def voice_turn(
 
 
 @app.get("/suppressions", response_model=list[SuppressionView])
-def open_suppressions(session: SessionDep) -> list[SuppressionView]:
+def open_suppressions(session: SessionDep, principal: OperatorDep) -> list[SuppressionView]:
+    filters = [Suppression.expires_at > datetime.now(UTC)]
+    if not principal.all_merchants:
+        filters.append(Suppression.merchant_id.in_(principal.merchant_ids))
     rows = session.scalars(
         select(Suppression)
-        .where(Suppression.expires_at > datetime.now(UTC))
+        .where(*filters)
         .order_by(Suppression.opened_at.desc())
     )
     return [SuppressionView.model_validate(item, from_attributes=True) for item in rows]
 
 
 @app.post("/suppressions/{suppression_id}/close", response_model=SuppressionView)
-def close_suppression(suppression_id: int, session: SessionDep) -> SuppressionView:
+def close_suppression(
+    suppression_id: int, session: SessionDep, principal: OperatorDep
+) -> SuppressionView:
     suppression = session.get(Suppression, suppression_id)
-    if suppression is None:
+    if suppression is None or not principal.permits(suppression.merchant_id):
         raise HTTPException(status_code=404, detail="suppression not found")
     suppression.expires_at = datetime.now(UTC)
     session.commit()
@@ -744,8 +831,20 @@ def close_suppression(suppression_id: int, session: SessionDep) -> SuppressionVi
 
 
 @app.get("/costs")
-def llm_costs(session: SessionDep, run_id: str | None = None) -> dict:
+def llm_costs(session: SessionDep, principal: OperatorDep, run_id: str | None = None) -> dict:
+    if run_id is not None:
+        _scoped_batch(session, run_id, principal)
     run_filter = [LLMCall.batch_run_id == run_id] if run_id else []
+    if not principal.all_merchants:
+        scoped_cases = select(RecoveryCase.id).where(
+            RecoveryCase.merchant_id.in_(principal.merchant_ids)
+        )
+        scoped_runs = select(BatchRun.id).where(
+            BatchRun.merchant_id.in_(principal.merchant_ids)
+        )
+        run_filter.append(
+            (LLMCall.case_id.in_(scoped_cases)) | (LLMCall.batch_run_id.in_(scoped_runs))
+        )
     totals = session.execute(
         select(
             func.count(LLMCall.id),
@@ -787,7 +886,7 @@ def llm_costs(session: SessionDep, run_id: str | None = None) -> dict:
 
 
 @app.get("/evals/latest", response_model=LatestEvalsView)
-def latest_evals(session: SessionDep) -> LatestEvalsView:
+def latest_evals(session: SessionDep, _principal: OperatorDep) -> LatestEvalsView:
     latest_by_suite: dict[str, EvalRun] = {}
     for run in session.scalars(select(EvalRun).order_by(EvalRun.ran_at.desc(), EvalRun.id.desc())):
         latest_by_suite.setdefault(run.suite, run)
@@ -804,11 +903,15 @@ def latest_evals(session: SessionDep) -> LatestEvalsView:
 
 
 @app.post("/batch/run", response_model=BatchRunView)
-def run_batch(request: BatchRunRequest, session: SessionDep) -> BatchRunView:
+def run_batch(
+    request: BatchRunRequest, session: SessionDep, principal: OperatorDep
+) -> BatchRunView:
     if get_settings().mode != "simulation":
         raise HTTPException(status_code=409, detail="batch simulation requires MODE=simulation")
     parameters = load_parameters()
     dataset = generate_dataset(parameters, seed=request.seed)
+    if not principal.permits(dataset.merchant_id):
+        raise HTTPException(status_code=404, detail="merchant not found")
     tuned_parameters = parameters.model_copy(
         update={"simulation": parameters.simulation.model_copy(update={"seed": request.seed})}
     )
@@ -821,10 +924,14 @@ def run_batch(request: BatchRunRequest, session: SessionDep) -> BatchRunView:
 
 
 @app.get("/scoreboard/latest", response_model=Scoreboard)
-def latest_scoreboard(session: SessionDep) -> Scoreboard:
+def latest_scoreboard(session: SessionDep, principal: OperatorDep) -> Scoreboard:
+    filters = []
+    if not principal.all_merchants:
+        filters.append(BatchRun.merchant_id.in_(principal.merchant_ids))
     run = session.scalar(
         select(BatchRun)
         .join(RecoveryCase, RecoveryCase.batch_run_id == BatchRun.id)
+        .where(*filters)
         .order_by(BatchRun.started_at.desc(), BatchRun.id.desc())
         .limit(1)
     )
@@ -837,7 +944,8 @@ def latest_scoreboard(session: SessionDep) -> Scoreboard:
 
 
 @app.get("/scoreboard/{run_id}", response_model=Scoreboard)
-def scoreboard(run_id: str, session: SessionDep) -> Scoreboard:
+def scoreboard(run_id: str, session: SessionDep, principal: OperatorDep) -> Scoreboard:
+    _scoped_batch(session, run_id, principal)
     try:
         return compute_scoreboard(session, run_id)
     except LookupError as exc:
@@ -847,7 +955,8 @@ def scoreboard(run_id: str, session: SessionDep) -> Scoreboard:
 
 
 @app.get("/scoreboard/{run_id}/exceptions", response_model=ExceptionReport)
-def scoreboard_exceptions(run_id: str, session: SessionDep) -> ExceptionReport:
-    if session.get(BatchRun, run_id) is None:
-        raise HTTPException(status_code=404, detail="batch run not found")
+def scoreboard_exceptions(
+    run_id: str, session: SessionDep, principal: OperatorDep
+) -> ExceptionReport:
+    _scoped_batch(session, run_id, principal)
     return exception_report(session, run_id)

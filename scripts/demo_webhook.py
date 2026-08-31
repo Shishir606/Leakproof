@@ -1,3 +1,5 @@
+"""Send one SIMULATED_END_TO_END fixture; this is not provider-verified recovery evidence."""
+
 from __future__ import annotations
 
 import hashlib

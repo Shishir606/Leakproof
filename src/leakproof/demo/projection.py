@@ -38,6 +38,7 @@ from leakproof.models.db import (
     ProviderCall,
     RecoveryCase,
 )
+from leakproof.provenance import DataProvenance
 
 
 def _utc(value: datetime) -> datetime:
@@ -382,6 +383,11 @@ def get_demo_session_projection(
         None,
     )
     return DemoSessionProjection(
+        data_provenance=(
+            DataProvenance.LIVE_PROVIDER_VERIFIED
+            if settings.mode == "live_demo"
+            else DataProvenance.SIMULATED_END_TO_END
+        ),
         session_id=demo.id,
         state=DemoSessionState(demo.state),
         amount_paise=demo.amount_paise,

@@ -11,6 +11,8 @@ from sqlalchemy.pool import StaticPool
 
 os.environ.setdefault("LEAKPROOF_ENVIRONMENT", "test")
 os.environ.setdefault("LEAKPROOF_RAZORPAY_WEBHOOK_SECRET", "test-secret")
+os.environ["LEAKPROOF_OPERATOR_API_TOKEN"] = "test-operator-token-that-is-at-least-32-bytes"
+os.environ["LEAKPROOF_OPERATOR_MERCHANT_IDS"] = "*"
 # Keep the test process isolated from a developer's credential-bearing .env file.
 os.environ["LEAKPROOF_MODE"] = "simulation"
 os.environ["LEAKPROOF_RAZORPAY_KEY_ID"] = ""
@@ -68,6 +70,11 @@ def client(
     app.dependency_overrides[get_demo_rate_limiter] = lambda: demo_rate_limiter
     monkeypatch.setattr("leakproof.api.app.process_webhook.delay", lambda _: None)
     monkeypatch.setattr("leakproof.api.app.check_demo_abandonment.apply_async", lambda **_: None)
-    with TestClient(app) as test_client:
+    with TestClient(
+        app,
+        headers={
+            "Authorization": "Bearer test-operator-token-that-is-at-least-32-bytes"
+        },
+    ) as test_client:
         yield test_client
     app.dependency_overrides.clear()

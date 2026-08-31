@@ -17,6 +17,12 @@ export default async function ScenarioLabPage() {
   let scoreboard;
   try {
     scoreboard = await getLatestScoreboard();
+    if (scoreboard.data_provenance !== "SIMULATED_END_TO_END") {
+      throw new ApiError(
+        `Scenario Lab rejected ${scoreboard.data_provenance} data.`,
+        409,
+      );
+    }
   } catch (error) {
     const detail = error instanceof ApiError ? error.message : "The latest recovery run is unavailable.";
     return <Shell active="scenario"><EmptyState title="No synthetic scoreboard yet" detail={detail} /></Shell>;
@@ -41,7 +47,7 @@ export default async function ScenarioLabPage() {
             <p className="header-copy">Treatment-versus-holdout measurement across one bounded recovery spine.</p>
           </div>
           <div className="run-meta">
-            <span className="data-badge">{scoreboard.synthetic ? "Synthetic dataset" : "Live dataset"}</span>
+            <span className="data-badge">Simulated end to end</span>
             <small>Batch {shortId(scoreboard.run_id)}</small>
             <strong>{scoreboard.cases_processed.toLocaleString("en-IN")} cases · {duration(scoreboard.duration_seconds)}</strong>
           </div>
@@ -49,7 +55,7 @@ export default async function ScenarioLabPage() {
 
         <section className="hero-grid">
           <article className="net-value-card">
-            <div className="card-label"><CoinsIcon /> Net value created</div>
+            <div className="card-label"><CoinsIcon /> Simulated net value estimate</div>
             <div className="hero-value">{money(scoreboard.net_value_created_paise)}</div>
             <p>Incremental recovery after every intervention and model cost.</p>
             <div className="value-waterfall">
@@ -59,7 +65,7 @@ export default async function ScenarioLabPage() {
             </div>
           </article>
           <article className="lift-card">
-            <div className="card-label"><PulseIcon /> Measured recovery lift</div>
+            <div className="card-label"><PulseIcon /> Simulated recovery lift estimate</div>
             <div className="lift-value">+{scoreboard.lift_percentage_points.toFixed(1)}<span>pp</span></div>
             <div className="arm-row">
               <span>Treatment</span>
@@ -76,7 +82,7 @@ export default async function ScenarioLabPage() {
         </section>
 
         <section className="metric-strip" aria-label="Recovery metrics">
-          <div><span>Gross recovered</span><strong>{money(scoreboard.gross_recovered_paise)}</strong><small>{scoreboard.treatment.recovered_cases} treated recoveries</small></div>
+          <div><span>Simulated gross recovery</span><strong>{money(scoreboard.gross_recovered_paise)}</strong><small>{scoreboard.treatment.recovered_cases} treated recoveries</small></div>
           <div><span>Organic holdout</span><strong>{money(scoreboard.organic_holdout_paise)}</strong><small>{scoreboard.holdout.recovered_cases} control recoveries</small></div>
           <div><span>Throughput</span><strong>{scoreboard.throughput_cases_per_minute.toFixed(1)}<sup>/min</sup></strong><small>{scoreboard.contacts} customer contacts</small></div>
           <div><span>Recovery cost</span><strong>{money(costs)}</strong><small>{money(scoreboard.llm_cost_paise)} model cost</small></div>
@@ -144,12 +150,12 @@ export default async function ScenarioLabPage() {
             </div>
             <div className="eval-rings"><span>{evaluations?.runs.filter((run) => run.passed).length ?? 0}<small>passing<br/>suites</small></span></div>
           </article>
-          <Link className="timeline-cta" href={`/cases?batch_run_id=${encodeURIComponent(scoreboard.run_id)}`}>
+          {process.env.LEAKPROOF_OPERATOR_UI_ENABLED === "true" && <Link className="timeline-cta" href={`/cases?batch_run_id=${encodeURIComponent(scoreboard.run_id)}`}>
             <span>Follow the evidence</span>
             <h2>Open the case timeline</h2>
             <p>Every assignment, decision, gate verdict, action and outcome—in sequence.</p>
             <ArrowIcon />
-          </Link>
+          </Link>}
         </section>
       </div>
     </Shell>

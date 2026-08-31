@@ -12,22 +12,25 @@ export function Logo() {
 }
 
 export function Shell({ children, active }: { children: ReactNode; active: "live" | "cases" | "demo" | "scenario" }) {
+  const operatorNavigationEnabled = process.env.LEAKPROOF_OPERATOR_UI_ENABLED === "true";
   return (
     <div className="app-shell">
       <aside className="sidebar">
         <Logo />
         <nav aria-label="Primary navigation">
           <Link className={active === "live" ? "nav-item active" : "nav-item"} href="/">
-            <GridIcon /> <span>Live Demo</span>
+            <GridIcon /> <span>Live Demo · verified</span>
           </Link>
-          <Link className={active === "cases" ? "nav-item active" : "nav-item"} href="/cases">
-            <TimelineIcon /> <span>Case timeline</span>
-          </Link>
+          {operatorNavigationEnabled && (
+            <Link className={active === "cases" ? "nav-item active" : "nav-item"} href="/cases">
+              <TimelineIcon /> <span>Case timeline</span>
+            </Link>
+          )}
           <Link className={active === "demo" ? "nav-item active" : "nav-item"} href="/demo">
             <CardIcon /> <span>Live checkout</span>
           </Link>
           <Link className={active === "scenario" ? "nav-item active" : "nav-item"} href="/scenario-lab">
-            <GridIcon /> <span>Scenario Lab</span>
+            <GridIcon /> <span>Scenario Lab · simulated</span>
           </Link>
         </nav>
         <div className="sidebar-footer">

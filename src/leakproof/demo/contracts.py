@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from leakproof.provenance import DataProvenance
+
 
 class StrictContract(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -196,6 +198,7 @@ class OperationalMetrics(StrictContract):
 
 
 class DemoSessionProjection(StrictContract):
+    data_provenance: DataProvenance
     session_id: str
     state: DemoSessionState
     amount_paise: int = Field(gt=0)
@@ -246,6 +249,7 @@ class DemoAcceptanceExport(StrictContract):
     """Sanitized, credential-free evidence captured during the release rehearsal."""
 
     schema_version: Literal["2026-09-04"] = "2026-09-04"
+    data_provenance: DataProvenance
     exported_at: datetime
     passed: bool
     session: AcceptanceSessionSummary
