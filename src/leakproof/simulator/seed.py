@@ -8,7 +8,14 @@ from sqlalchemy.orm import Session
 
 from leakproof.audit.timeline import append_event
 from leakproof.config import get_measurement_config
-from leakproof.models.db import BatchRun, Customer, Event, Merchant, RecoveryCase
+from leakproof.models.db import (
+    BatchRun,
+    Customer,
+    Event,
+    Merchant,
+    PaymentAttemptObservation,
+    RecoveryCase,
+)
 from leakproof.services import amount_band, assigned_arm, dedupe_key, record_signal
 from leakproof.simulator.generate import SimulationDataset
 
@@ -86,14 +93,18 @@ def persist_dataset(session: Session, dataset: SimulationDataset) -> PersistedSi
             select(RecoveryCase).where(RecoveryCase.merchant_id == dataset.merchant_id)
         )
     }
-    assigned_case_ids = set(
-        session.scalars(
-            select(Event.case_id).where(
-                Event.case_id.in_([case.id for case in existing_cases.values()]),
-                Event.kind == "ASSIGNED",
+    assigned_case_ids = (
+        set(
+            session.scalars(
+                select(Event.case_id).where(
+                    Event.case_id.in_([case.id for case in existing_cases.values()]),
+                    Event.kind == "ASSIGNED",
+                )
             )
         )
-    ) if existing_cases else set()
+        if existing_cases
+        else set()
+    )
     created_cases = 0
     events_appended = 0
     for simulated in dataset.signals:
@@ -139,6 +150,37 @@ def persist_dataset(session: Session, dataset: SimulationDataset) -> PersistedSi
     if batch_created:
         assert batch_run is not None
         batch_run.completed_at = datetime.now(UTC)
+    existing_attempt_keys = set(
+        session.scalars(
+            select(PaymentAttemptObservation.attempt_key).where(
+                PaymentAttemptObservation.merchant_id == dataset.merchant_id,
+                PaymentAttemptObservation.provider == "simulator",
+                PaymentAttemptObservation.namespace == dataset.run_id,
+            )
+        )
+    )
+    session.add_all(
+        PaymentAttemptObservation(
+            merchant_id=dataset.merchant_id,
+            provider="simulator",
+            namespace=dataset.run_id,
+            attempt_key=item.attempt_key,
+            provider_event_key=item.provider_event_key,
+            provider_payment_id=item.provider_payment_id,
+            provider_order_id=item.provider_order_id,
+            observed_at=item.observed_at,
+            outcome=item.outcome,
+            method=item.method,
+            issuer=item.issuer,
+            bin_bucket=item.bin_bucket,
+            checkout_step=item.checkout_step,
+            checkout_version=item.checkout_version,
+            error_reason=item.error_reason,
+            source="synthetic",
+        )
+        for item in dataset.attempt_observations
+        if item.attempt_key not in existing_attempt_keys
+    )
     session.commit()
     return PersistedSimulation(
         merchant_id=dataset.merchant_id,

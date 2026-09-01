@@ -6,7 +6,12 @@ import json
 
 from sqlalchemy import func, select
 
-from leakproof.models.db import Event, RecoveryCase, WebhookEvent
+from leakproof.models.db import (
+    Event,
+    PaymentAttemptObservation,
+    RecoveryCase,
+    WebhookEvent,
+)
 from leakproof.sensors.processor import process_stored_webhook
 
 
@@ -22,9 +27,49 @@ def payment_failed(payment_id: str) -> dict:
                     "customer_id": "customer_same",
                     "amount": 250_000,
                     "currency": "INR",
+                    "method": "netbanking",
+                    "bank": "HDFC",
                     "error_source": "bank",
                     "error_step": "payment_authorization",
                     "error_reason": "gateway_technical_error",
+                }
+            }
+        },
+    }
+
+
+def payment_captured(payment_id: str, order_id: str) -> dict:
+    return {
+        "event": "payment.captured",
+        "created_at": 1787625060,
+        "payload": {
+            "payment": {
+                "entity": {
+                    "id": payment_id,
+                    "order_id": order_id,
+                    "amount": 250_000,
+                    "currency": "INR",
+                    "status": "captured",
+                    "method": "card",
+                    "card": {"issuer": "HDFC", "iin": "411111"},
+                }
+            }
+        },
+    }
+
+
+def order_paid(order_id: str) -> dict:
+    return {
+        "event": "order.paid",
+        "created_at": 1787625070,
+        "payload": {
+            "order": {
+                "entity": {
+                    "id": order_id,
+                    "amount": 250_000,
+                    "amount_paid": 250_000,
+                    "currency": "INR",
+                    "status": "paid",
                 }
             }
         },
@@ -129,6 +174,41 @@ def test_worker_redelivery_does_not_append_another_case_event(client, session_fa
         assert session.scalar(select(func.count()).select_from(RecoveryCase)) == 1
         assert session.scalar(select(func.count()).select_from(Event)) == 2
         assert session.get(WebhookEvent, webhook_id).processing_attempts == 1
+
+
+def test_duplicate_failure_payment_is_one_observed_attempt(client, session_factory):
+    ids = []
+    for event_id in ("rzp_failure_delivery_1", "rzp_failure_delivery_2"):
+        response = post_webhook(client, payment_failed("pay_same_attempt"), event_id)
+        ids.append(response.json()["webhook_id"])
+
+    with session_factory() as session:
+        for webhook_id in ids:
+            process_stored_webhook(session, webhook_id)
+        observations = list(session.scalars(select(PaymentAttemptObservation)))
+
+    assert len(observations) == 1
+    assert observations[0].outcome == "failure"
+    assert observations[0].method == "netbanking"
+    assert observations[0].issuer == "HDFC"
+
+
+def test_captured_and_order_paid_reconcile_to_one_success(client, session_factory):
+    captured = post_webhook(
+        client, payment_captured("pay_captured", "order_captured"), "rzp_captured"
+    )
+    paid = post_webhook(client, order_paid("order_captured"), "rzp_order_paid")
+
+    with session_factory() as session:
+        process_stored_webhook(session, captured.json()["webhook_id"])
+        process_stored_webhook(session, paid.json()["webhook_id"])
+        observations = list(session.scalars(select(PaymentAttemptObservation)))
+
+    assert len(observations) == 1
+    assert observations[0].outcome == "success"
+    assert observations[0].provider_payment_id == "pay_captured"
+    assert observations[0].provider_order_id == "order_captured"
+    assert observations[0].bin_bucket == "411111"
 
 
 def test_failed_enqueue_keeps_committed_webhook_available_for_dispatch(

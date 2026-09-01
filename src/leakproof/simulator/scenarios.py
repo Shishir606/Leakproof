@@ -62,8 +62,6 @@ def build_injected_scenarios(parameters: SimulatorParameters) -> list[ScenarioSi
                     "error_source": "bank",
                     "error_step": "payment_authorization",
                     "error_reason": "gateway_technical_error",
-                    "cohort_failure_rate": scenarios.issuer_outage.failure_rate,
-                    "baseline_failure_rate": 0.043,
                     "incident_duration_minutes": scenarios.issuer_outage.duration_minutes,
                 },
             )
@@ -152,9 +150,7 @@ def build_injected_scenarios(parameters: SimulatorParameters) -> list[ScenarioSi
 
     for index in range(scenarios.invoice_aging.overdue_invoices):
         overdue_days = min(1 + (index * 7) % 97, scenarios.invoice_aging.max_days_overdue)
-        aging_bucket = (
-            "1-7" if overdue_days <= 7 else "8-30" if overdue_days <= 30 else "31-90"
-        )
+        aging_bucket = "1-7" if overdue_days <= 7 else "8-30" if overdue_days <= 30 else "31-90"
         signals.append(
             ScenarioSignal(
                 scenario="invoice_aging",

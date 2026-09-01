@@ -8,8 +8,9 @@ to a durable Postgres inbox, deduplicates by provider event ID, and only then as
 to normalize it. A fixed-seed simulator sends all five revenue-leak types through that same case
 and append-only event spine. PostgreSQL rejects updates and deletes against the event timeline,
 worker redelivery cannot append duplicate events or repeat an actuator call, and repeating a
-simulator seed cannot duplicate cases. A ten-minute aggregate cohort scan detects qualified
-issuer incidents without sending customer or entity identifiers to the model.
+simulator seed cannot duplicate cases. A ten-minute aggregate cohort scan uses durable,
+deduplicated success and failure observations to detect qualified issuer incidents without
+sending customer or entity identifiers to the model.
 
 ## Capability and provenance contract
 
@@ -305,22 +306,28 @@ make test-august-29
 
 ## August 30: aggregate Tier 2 reasoner and circuit breaker
 
-Celery Beat now scans twenty-minute failure windows every ten minutes. The input contract contains
-only counts, baselines, issuer/method dimensions, and reason frequencies. Before model routing, a
-deterministic qualifier requires at least 20 attempts, a failure rate at least three times baseline,
-and an 80% bank-or-gateway error share. This keeps ordinary and near-miss traffic out of Tier 2.
+Celery Beat scans twenty-minute payment-attempt windows every ten minutes. Verified
+`payment.failed`, `payment.captured`, and `order.paid` webhooks are reconciled into a sanitized
+`payment_attempt_observations` ledger; a captured payment plus its `order.paid` event counts once.
+The input contract contains only observed counts, issuer/method or other safe aggregate dimensions,
+stable evidence-slice IDs, and reason frequencies. It never derives a denominator from a declared
+failure-rate field. Before model routing, a deterministic qualifier requires at least 20 current
+attempts, 50 historical attempts, a failure rate at least three times baseline, and an 80%
+bank-or-gateway error share. Missing evidence returns `INSUFFICIENT_DATA` without calling a model.
 
-Qualified aggregates use a versioned prompt and a strict structured-output schema. Schema failures
-retry once through the configured escalation route, then degrade to no anomaly without stopping the
-batch. Every logical call, including failures and budget denials, is written to `llm_calls` with
-model, prompt version, tokens, paise cost, latency, schema status, and retry count. Simulation uses a
-deterministic structured transport; a production transport can implement the same client contract.
+Qualified aggregates use a versioned prompt and a strict structured-output schema. In `live_demo`,
+the factory selects the tool-free, non-stored OpenAI Responses adapter or an explicitly unavailable
+provider that degrades safely; it never substitutes deterministic output. Every logical call,
+including failures and budget denials, is written to `llm_calls` with provider request ID, error
+class, model, prompt version, tokens, paise cost, latency, schema status, and retry count. Simulation
+and offline evaluation alone use the deterministic transport.
 
-A `GLOBAL_SUPPRESS` result with confidence at least 0.80 opens one idempotent, scoped circuit
-breaker. Matching cases move to `SUPPRESSED`, pending actions are cancelled, and all 47 injected
-HDFC/netbanking outage cases receive an append-only `SUPPRESSED` event. Unrelated merchant cases
-remain actionable, and actuator pre-flight checks now match the case evidence against the open
-scope instead of treating every merchant suppression as global.
+Model output is only a proposal. Deterministic validation rechecks evidence-slice IDs, observed
+thresholds, scope containment, action, confidence, and a 120-minute TTL ceiling before any
+consequence. `AI_PROPOSED`, `POLICY_VALIDATED` or `AI_PROPOSAL_REJECTED`, and the resulting
+`SUPPRESSION_OPENED`, `RETRY_DELAYED`, `MERCHANT_ALERTED`, or `NO_ACTION` events remain distinct in
+the timeline. An accepted `GLOBAL_SUPPRESS` proposal opens one idempotent, scoped circuit breaker;
+all 47 injected HDFC/netbanking cases are suppressed while unrelated cases remain actionable.
 
 Run the August 30 acceptance slice alone:
 
@@ -519,7 +526,7 @@ The tests demonstrate:
 - paid webhooks close the case and cancel every later pending action.
 - aggregate Tier 2 input contains no customer or entity identifiers;
 - the issuer outage opens one breaker and suppresses exactly 47/47 matching cases;
-- malformed structured output retries once, is logged, and suppresses zero cases;
+- malformed structured output is cost-audited, records `AI_DEGRADED → NO_ACTION`, and suppresses zero cases;
 - repeated cohort scans do not duplicate breakers or suppression events.
 - holdout assignment is reproducible, stratified, and present in the audit timeline;
 - holdout cases are diagnosed without schedules, interventions, contacts, or frequency usage;

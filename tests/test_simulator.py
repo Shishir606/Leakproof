@@ -40,11 +40,11 @@ def test_fixed_seed_generates_identical_artifacts_and_another_seed_changes_them(
     assert repeated.fingerprint() == dataset.fingerprint()
     assert alternate.fingerprint() != dataset.fingerprint()
     assert alternate.run_id != dataset.run_id
-    assert dataset.simulator_schema_version == 2
-    assert dataset.run_id.startswith("sim_v2_")
+    assert dataset.simulator_schema_version == 3
+    assert dataset.run_id.startswith("sim_v3_")
     first = dataset.signals[0]
     assert first.assignment_key.startswith("merchant_sim_42_")
-    assert "v2" not in first.assignment_key
+    assert "v3" not in first.assignment_key
     assert first.outcome_key.startswith("pf:simcust_42_")
     normalized = first.normalized(dataset.run_id)
     assert normalized.evidence["simulation"]["assignment_key"] == first.assignment_key
@@ -104,7 +104,16 @@ def test_all_five_scenarios_have_the_specified_incident_shapes(dataset):
     assert max(signal.occurred_at for signal in outage) - min(
         signal.occurred_at for signal in outage
     ) < timedelta(minutes=40)
-    assert all(signal.evidence["cohort_failure_rate"] == 0.9 for signal in outage)
+    assert all("cohort_failure_rate" not in signal.evidence for signal in outage)
+    current_observations = [
+        item
+        for item in dataset.attempt_observations
+        if min(signal.occurred_at for signal in outage)
+        <= item.observed_at
+        <= max(signal.occurred_at for signal in outage)
+    ]
+    assert len(current_observations) == 52
+    assert sum(item.outcome == "failure" for item in current_observations) == 47
 
     expired = by_scenario["expired_card_cohort"]
     expiry_dates = {

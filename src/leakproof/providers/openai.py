@@ -14,6 +14,8 @@ from leakproof.demo.contracts import CaseInsight
 from leakproof.providers.contracts import (
     CaseInsightRequest,
     CaseInsightResult,
+    CohortAnalysisRequest,
+    CohortAnalysisResult,
     ProviderError,
 )
 
@@ -234,3 +236,143 @@ class OpenAICaseInsightProvider:
             latency_ms=round((time.perf_counter() - started) * 1000),
             attempts=self._max_attempts,
         )
+
+
+class OpenAICohortAnalysisProvider:
+    """Strict, tool-free Responses adapter for consequential cohort proposals."""
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        model: str = "gpt-5.6-luna",
+        base_url: str = "https://api.openai.com",
+        timeout_seconds: float = 8.0,
+        max_attempts: int = 2,
+        usd_to_inr: Decimal | float | str = Decimal("100"),
+        client: httpx2.Client | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        if not api_key:
+            raise ValueError("OpenAI API key is required")
+        if max_attempts not in {1, 2}:
+            raise ValueError("cohort analysis supports at most two attempts")
+        self._client = client or httpx2.Client(
+            base_url=base_url,
+            timeout=timeout_seconds,
+            trust_env=False,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+        )
+        self._model = model
+        self._max_attempts = max_attempts
+        self._usd_to_inr = Decimal(str(usd_to_inr))
+        self._sleep = sleep
+
+    def analyze_cohort(self, request: CohortAnalysisRequest) -> CohortAnalysisResult:
+        body = {
+            "model": self._model,
+            "instructions": request.instructions,
+            "input": json.dumps(request.aggregate_payload, sort_keys=True, separators=(",", ":")),
+            "reasoning": {"effort": "low"},
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "cohort_intervention_proposal",
+                    "strict": True,
+                    "schema": request.output_schema,
+                }
+            },
+            "tools": [],
+            "store": False,
+            "max_output_tokens": request.max_output_tokens,
+        }
+        started = time.perf_counter()
+        total_input = 0
+        total_output = 0
+        request_id: str | None = None
+        error_class = "provider_unavailable"
+        status_code: int | None = None
+        for attempt in range(1, self._max_attempts + 1):
+            try:
+                response = self._client.post("/v1/responses", json=body)
+            except httpx2.TimeoutException as exc:
+                error_class = "timeout"
+                if attempt < self._max_attempts:
+                    self._sleep(0.1 * attempt)
+                    continue
+                cause: Exception | None = exc
+                break
+            except httpx2.RequestError as exc:
+                error_class = "transport_error"
+                if attempt < self._max_attempts:
+                    self._sleep(0.1 * attempt)
+                    continue
+                cause = exc
+                break
+            status_code = response.status_code
+            request_id = response.headers.get("x-request-id")
+            if response.status_code in {401, 403}:
+                error_class = "authentication_failed"
+                cause = None
+                break
+            if response.status_code == 429 or response.status_code >= 500:
+                error_class = (
+                    "quota_exhausted" if response.status_code == 429 else "provider_unavailable"
+                )
+                if attempt < self._max_attempts:
+                    self._sleep(0.1 * attempt)
+                    continue
+                cause = None
+                break
+            if response.status_code >= 400:
+                error_class = "request_rejected"
+                cause = None
+                break
+            try:
+                payload = response.json()
+                if not isinstance(payload, dict) or payload.get("status") != "completed":
+                    raise ValueError("response was not completed")
+                usage = payload.get("usage") or {}
+                total_input += max(0, int(usage.get("input_tokens", 0)))
+                total_output += max(0, int(usage.get("output_tokens", 0)))
+                request_id = str(payload.get("id") or request_id or "") or None
+                data = json.loads(_output_text(payload))
+                if not isinstance(data, dict):
+                    raise ValueError("cohort output must be an object")
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                error_class = "invalid_schema"
+                if attempt < self._max_attempts:
+                    self._sleep(0.1 * attempt)
+                    continue
+                cause = exc
+                break
+            return CohortAnalysisResult(
+                data=data,
+                request_id=request_id,
+                input_tokens=total_input,
+                output_tokens=total_output,
+                cost_paise=_cost_paise(total_input, total_output, self._usd_to_inr),
+                latency_ms=round((time.perf_counter() - started) * 1000),
+                attempts=attempt,
+            )
+        error = ProviderError(
+            provider="openai",
+            operation="cohort_analysis",
+            error_class=error_class,
+            retryable=error_class in {"timeout", "transport_error", "provider_unavailable"},
+            message="OpenAI cohort analysis was unavailable or invalid",
+            request_id=request_id,
+            status_code=status_code,
+            input_tokens=total_input,
+            output_tokens=total_output,
+            cost_paise=_cost_paise(total_input, total_output, self._usd_to_inr),
+            latency_ms=round((time.perf_counter() - started) * 1000),
+            attempts=self._max_attempts,
+        )
+        if cause is not None:
+            raise error from cause
+        raise error

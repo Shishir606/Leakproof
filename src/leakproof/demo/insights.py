@@ -123,8 +123,12 @@ def _finish(
     record.updated_at = datetime.now(UTC)
     session.add(
         LLMCall(
+            merchant_id=case.merchant_id,
             case_id=case.id,
             purpose="case_insight",
+            provider="openai",
+            request_id=request_id,
+            error_class=fallback_reason,
             model=model,
             prompt_version=CASE_INSIGHT_PROMPT_VERSION,
             input_tokens=max(0, input_tokens),
@@ -203,9 +207,7 @@ def generate_case_insight(
     if diagnosis is None:
         raise ValueError(f"case {case_id} must be diagnosed before requesting an insight")
     record = session.scalar(
-        select(CaseInsightRecord)
-        .where(CaseInsightRecord.case_id == case_id)
-        .with_for_update()
+        select(CaseInsightRecord).where(CaseInsightRecord.case_id == case_id).with_for_update()
     )
     if record is None:
         record = mark_case_insight_pending(session, case_id)

@@ -271,9 +271,13 @@ class LLMCall(Base):
     __tablename__ = "llm_calls"
 
     id: Mapped[int] = mapped_column(BIGINT_PK, primary_key=True, autoincrement=True)
+    merchant_id: Mapped[str | None] = mapped_column(ForeignKey("merchants.id"))
     case_id: Mapped[str | None] = mapped_column(ForeignKey("cases.id"))
     batch_run_id: Mapped[str | None] = mapped_column(ForeignKey("batch_runs.id"))
     purpose: Mapped[str] = mapped_column(String, nullable=False)
+    provider: Mapped[str] = mapped_column(String(40), default="unknown", nullable=False)
+    request_id: Mapped[str | None] = mapped_column(String(255))
+    error_class: Mapped[str | None] = mapped_column(String(100))
     model: Mapped[str] = mapped_column(String, nullable=False)
     prompt_version: Mapped[str] = mapped_column(String, nullable=False)
     input_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -319,6 +323,49 @@ class WebhookEvent(Base):
     last_error: Mapped[str | None] = mapped_column(Text)
 
 
+class PaymentAttemptObservation(Base):
+    """Sanitized, deduplicated provider truth used for cohort analysis."""
+
+    __tablename__ = "payment_attempt_observations"
+    __table_args__ = (
+        UniqueConstraint(
+            "merchant_id",
+            "provider",
+            "namespace",
+            "attempt_key",
+            name="uq_payment_attempt_provider_key",
+        ),
+        Index(
+            "ix_payment_attempt_merchant_observed",
+            "merchant_id",
+            "namespace",
+            "observed_at",
+        ),
+        Index("ix_payment_attempt_outcome", "merchant_id", "namespace", "outcome"),
+        Index("ix_payment_attempt_issuer", "merchant_id", "namespace", "issuer"),
+        Index("ix_payment_attempt_method", "merchant_id", "namespace", "method"),
+    )
+
+    id: Mapped[int] = mapped_column(BIGINT_PK, primary_key=True, autoincrement=True)
+    merchant_id: Mapped[str] = mapped_column(ForeignKey("merchants.id"), nullable=False)
+    provider: Mapped[str] = mapped_column(String(40), nullable=False)
+    namespace: Mapped[str] = mapped_column(String(160), nullable=False, default="live")
+    attempt_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    provider_event_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    provider_payment_id: Mapped[str | None] = mapped_column(String(255))
+    provider_order_id: Mapped[str | None] = mapped_column(String(255))
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False)
+    method: Mapped[str] = mapped_column(String(80), nullable=False, default="unknown")
+    issuer: Mapped[str] = mapped_column(String(120), nullable=False, default="unknown")
+    bin_bucket: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
+    checkout_step: Mapped[str] = mapped_column(String(120), nullable=False, default="unknown")
+    checkout_version: Mapped[str] = mapped_column(String(80), nullable=False, default="unknown")
+    error_reason: Mapped[str] = mapped_column(String(160), nullable=False, default="unknown")
+    source: Mapped[str] = mapped_column(String(40), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class DemoSession(Base):
     __tablename__ = "demo_sessions"
     __table_args__ = (
@@ -351,9 +398,7 @@ class DemoSession(Base):
 class CheckoutEvent(Base):
     __tablename__ = "checkout_events"
     __table_args__ = (
-        UniqueConstraint(
-            "session_id", "client_event_id", name="uq_checkout_events_session_client"
-        ),
+        UniqueConstraint("session_id", "client_event_id", name="uq_checkout_events_session_client"),
         Index("ix_checkout_events_session_received", "session_id", "received_at"),
     )
 

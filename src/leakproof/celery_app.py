@@ -14,10 +14,18 @@ from leakproof.demo.insights import generate_case_insight, mark_case_insight_pen
 from leakproof.demo.service import due_abandonment_checks, materialize_checkout_abandonment
 from leakproof.diagnosis import diagnose_case
 from leakproof.diagnosis.tier2 import run_cohort_scan
-from leakproof.models.db import Action, CaseInsightRecord, DemoSession, RecoveryCase, WebhookEvent
+from leakproof.models.db import (
+    Action,
+    CaseInsightRecord,
+    DemoSession,
+    PaymentAttemptObservation,
+    RecoveryCase,
+    WebhookEvent,
+)
 from leakproof.providers import ProviderError
 from leakproof.providers.factory import (
     get_case_insight_provider,
+    get_cohort_analysis_provider,
     get_email_provider,
     get_payment_provider,
 )
@@ -231,20 +239,23 @@ def scan_failure_cohorts() -> dict[str, dict]:
     with SessionLocal() as session:
         merchant_ids = list(
             session.scalars(
-                select(RecoveryCase.merchant_id)
+                select(PaymentAttemptObservation.merchant_id)
                 .where(
-                    RecoveryCase.detected_at >= window_from,
-                    RecoveryCase.detected_at < window_to,
+                    PaymentAttemptObservation.namespace == "live",
+                    PaymentAttemptObservation.observed_at >= window_from,
+                    PaymentAttemptObservation.observed_at < window_to,
                 )
                 .distinct()
             )
         )
+        provider = get_cohort_analysis_provider()
         return {
             merchant_id: run_cohort_scan(
                 session,
                 merchant_id=merchant_id,
                 window_from=window_from,
                 window_to=window_to,
+                provider=provider,
             ).__dict__
             for merchant_id in merchant_ids
         }

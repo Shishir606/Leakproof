@@ -112,9 +112,7 @@ def contract_error(
     retryable: bool = False,
     headers: dict[str, str] | None = None,
 ) -> JSONResponse:
-    body = APIError(
-        error=APIErrorDetail(code=code, message=message, retryable=retryable)
-    )
+    body = APIError(error=APIErrorDetail(code=code, message=message, retryable=retryable))
     return JSONResponse(
         status_code=status_code,
         content=body.model_dump(mode="json"),
@@ -273,9 +271,7 @@ def enqueue_webhook(webhook_id: int) -> None:
         logger.exception("webhook persisted; immediate enqueue failed", extra={"id": webhook_id})
 
 
-def _scoped_case(
-    session: Session, case_id: str, principal: OperatorPrincipal
-) -> RecoveryCase:
+def _scoped_case(session: Session, case_id: str, principal: OperatorPrincipal) -> RecoveryCase:
     filters = [RecoveryCase.id == case_id]
     if not principal.all_merchants:
         filters.append(RecoveryCase.merchant_id.in_(principal.merchant_ids))
@@ -285,9 +281,7 @@ def _scoped_case(
     return case
 
 
-def _scoped_batch(
-    session: Session, run_id: str, principal: OperatorPrincipal
-) -> BatchRun:
+def _scoped_batch(session: Session, run_id: str, principal: OperatorPrincipal) -> BatchRun:
     filters = [BatchRun.id == run_id]
     if not principal.all_merchants:
         filters.append(BatchRun.merchant_id.in_(principal.merchant_ids))
@@ -669,9 +663,7 @@ def cases(
     if batch_run_id:
         filters.append(RecoveryCase.batch_run_id == batch_run_id)
 
-    total = int(
-        session.scalar(select(func.count(RecoveryCase.id)).where(*filters)) or 0
-    )
+    total = int(session.scalar(select(func.count(RecoveryCase.id)).where(*filters)) or 0)
     event_counts = (
         select(Event.case_id, func.count(Event.id).label("event_count"))
         .group_by(Event.case_id)
@@ -728,9 +720,7 @@ def case_detail(case_id: str, session: SessionDep, principal: OperatorDep) -> Ca
         raise HTTPException(status_code=404, detail="case not found") from exc
     diagnosis = session.get(Diagnosis, case_id)
     actions = list(
-        session.scalars(
-            select(Action).where(Action.case_id == case_id).order_by(Action.step_index)
-        )
+        session.scalars(select(Action).where(Action.case_id == case_id).order_by(Action.step_index))
     )
     attribution = session.scalar(
         select(RecoveryAttribution).where(RecoveryAttribution.case_id == case_id)
@@ -744,9 +734,9 @@ def case_detail(case_id: str, session: SessionDep, principal: OperatorDep) -> Ca
     )
     return CaseDetailView(
         case=CaseListItem(
-            **CaseListItem.model_validate(
-                case_row, from_attributes=True
-            ).model_dump(exclude={"event_count"}),
+            **CaseListItem.model_validate(case_row, from_attributes=True).model_dump(
+                exclude={"event_count"}
+            ),
             event_count=len(replay.events),
         ),
         replay=replay,
@@ -811,9 +801,7 @@ def open_suppressions(session: SessionDep, principal: OperatorDep) -> list[Suppr
     if not principal.all_merchants:
         filters.append(Suppression.merchant_id.in_(principal.merchant_ids))
     rows = session.scalars(
-        select(Suppression)
-        .where(*filters)
-        .order_by(Suppression.opened_at.desc())
+        select(Suppression).where(*filters).order_by(Suppression.opened_at.desc())
     )
     return [SuppressionView.model_validate(item, from_attributes=True) for item in rows]
 
@@ -839,11 +827,11 @@ def llm_costs(session: SessionDep, principal: OperatorDep, run_id: str | None = 
         scoped_cases = select(RecoveryCase.id).where(
             RecoveryCase.merchant_id.in_(principal.merchant_ids)
         )
-        scoped_runs = select(BatchRun.id).where(
-            BatchRun.merchant_id.in_(principal.merchant_ids)
-        )
+        scoped_runs = select(BatchRun.id).where(BatchRun.merchant_id.in_(principal.merchant_ids))
         run_filter.append(
-            (LLMCall.case_id.in_(scoped_cases)) | (LLMCall.batch_run_id.in_(scoped_runs))
+            (LLMCall.merchant_id.in_(principal.merchant_ids))
+            | (LLMCall.case_id.in_(scoped_cases))
+            | (LLMCall.batch_run_id.in_(scoped_runs))
         )
     totals = session.execute(
         select(
@@ -856,9 +844,7 @@ def llm_costs(session: SessionDep, principal: OperatorDep, run_id: str | None = 
     ).one()
     schema_ok_calls = int(
         session.scalar(
-            select(func.count(LLMCall.id)).where(
-                LLMCall.schema_ok.is_(True), *run_filter
-            )
+            select(func.count(LLMCall.id)).where(LLMCall.schema_ok.is_(True), *run_filter)
         )
         or 0
     )
@@ -867,7 +853,9 @@ def llm_costs(session: SessionDep, principal: OperatorDep, run_id: str | None = 
             LLMCall.purpose,
             func.count(LLMCall.id),
             func.coalesce(func.sum(LLMCall.cost_paise), 0),
-        ).where(*run_filter).group_by(LLMCall.purpose)
+        )
+        .where(*run_filter)
+        .group_by(LLMCall.purpose)
     ).all()
     calls = int(totals[0])
     return {

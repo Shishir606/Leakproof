@@ -42,12 +42,21 @@ function receipt(status: ProviderStatus) {
 }
 
 function detail(payload: Record<string, unknown>) {
-  const preferred = ["failure_class", "decision", "status", "outcome", "reason"];
+  const preferred = ["failure_class", "recommended_action", "decision", "status", "outcome", "reason"];
   for (const key of preferred) {
     const value = payload[key];
     if (typeof value === "string" && value) return label(value);
   }
   return "Sanitized audit event";
+}
+
+function scopeDetail(payload: Record<string, unknown>) {
+  const scope = payload.scope;
+  if (!scope || typeof scope !== "object" || Array.isArray(scope)) return "No scope proposed";
+  const entries = Object.entries(scope as Record<string, unknown>)
+    .filter(([, value]) => typeof value === "string")
+    .map(([key, value]) => `${label(key)} ${String(value)}`);
+  return entries.length ? entries.join(" · ") : "No scope proposed";
 }
 
 function EmptyLiveDemo() {
@@ -151,6 +160,14 @@ export function LiveDemoDashboard() {
   for (const status of projection.provider_statuses) latestProviders.set(status.provider, status);
   const events = [...projection.timeline].reverse().slice(0, 12);
   const diagnosis = currentCase?.deterministic_diagnosis;
+  const cohortProposal = [...projection.timeline]
+    .reverse()
+    .find((event) => event.kind === "AI_PROPOSED");
+  const cohortVerdict = [...projection.timeline]
+    .reverse()
+    .find((event) =>
+      ["POLICY_VALIDATED", "AI_PROPOSAL_REJECTED", "AI_DEGRADED"].includes(event.kind),
+    );
 
   return (
     <div className="live-dashboard">
@@ -207,6 +224,16 @@ export function LiveDemoDashboard() {
               <span>Gate decision</span>
               <strong>{projection.gate_verdict ? label(projection.gate_verdict) : "Pre-flight pending"}</strong>
               <small>Applied immediately before outbound email</small>
+            </div>
+            <div>
+              <span>AI cohort proposal</span>
+              <strong>{cohortProposal ? label(String(cohortProposal.payload.recommended_action ?? "NO_ACTION")) : "No qualified cohort yet"}</strong>
+              <small>{cohortProposal ? scopeDetail(cohortProposal.payload) : "Only observed aggregate attempt data can qualify"}</small>
+            </div>
+            <div>
+              <span>Deterministic cohort verdict</span>
+              <strong>{cohortVerdict ? label(cohortVerdict.kind) : "Awaiting proposal"}</strong>
+              <small>{cohortVerdict ? detail(cohortVerdict.payload) : "Scope, thresholds, confidence and TTL are rechecked"}</small>
             </div>
           </div>
           <div className={`insight-card insight-${currentCase?.insight_status ?? "pending"}`}>

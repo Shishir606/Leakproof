@@ -16,7 +16,13 @@ from leakproof.demo.service import create_demo_session
 from leakproof.diagnosis import diagnose_case, refresh_payment_diagnosis
 from leakproof.models.db import CaseInsightRecord, DemoSession, Event, LLMCall, ProviderCall
 from leakproof.models.domain import Arm, LeakType
-from leakproof.providers import CaseInsightRequest, OpenAICaseInsightProvider, ProviderError
+from leakproof.providers import (
+    CaseInsightRequest,
+    CohortAnalysisRequest,
+    OpenAICaseInsightProvider,
+    OpenAICohortAnalysisProvider,
+    ProviderError,
+)
 from leakproof.providers.fakes import FakeCaseInsightProvider, FakePaymentProvider
 from leakproof.services import NormalizedSignal, record_signal
 
@@ -137,6 +143,57 @@ def test_openai_responses_adapter_retries_invalid_schema_and_uses_safe_bounded_c
     assert "email" not in json.dumps(requests[0]).casefold()
 
 
+def test_openai_cohort_adapter_uses_strict_tool_free_non_stored_output():
+    requests: list[dict] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        requests.append(json.loads(request.content))
+        output = "not-json" if len(requests) == 1 else '{"anomalies":[]}'
+        return httpx2.Response(
+            200,
+            json={
+                "id": f"cohort_resp_{len(requests)}",
+                "status": "completed",
+                "usage": {"input_tokens": 30, "output_tokens": 10},
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": output}],
+                    }
+                ],
+            },
+        )
+
+    provider = OpenAICohortAnalysisProvider(
+        "test-key",
+        client=httpx2.Client(transport=httpx2.MockTransport(handler)),
+        sleep=lambda _: None,
+    )
+    result = provider.analyze_cohort(
+        CohortAnalysisRequest(
+            aggregate_payload={"slices": [{"slice_id": "slice_safe", "attempts": 52}]},
+            output_schema={
+                "type": "object",
+                "properties": {"anomalies": {"type": "array", "items": {}}},
+                "required": ["anomalies"],
+                "additionalProperties": False,
+            },
+            model="gpt-5.6-luna",
+            max_output_tokens=1200,
+            instructions="Use only supplied aggregate evidence.",
+        )
+    )
+
+    assert result.data == {"anomalies": []}
+    assert result.attempts == 2
+    assert len(requests) == 2
+    assert requests[0]["store"] is False
+    assert requests[0]["tools"] == []
+    assert requests[0]["max_output_tokens"] == 1200
+    assert requests[0]["text"]["format"]["type"] == "json_schema"
+    assert requests[0]["text"]["format"]["strict"] is True
+
+
 def test_session_projection_route_returns_the_live_contract(client):
     created = client.post("/demo/sessions", json={})
     assert created.status_code == 201
@@ -247,12 +304,17 @@ def test_timeout_persists_deterministic_fallback_without_blocking_recovery(sessi
         assert projection.case.insight_status == "fallback"
         assert projection.recovery_url_available is True
         assert projection.case.insight is not None
-        assert session.scalar(
-            select(func.count()).select_from(Event).where(
-                Event.case_id == case.id,
-                Event.kind == "CASE_INSIGHT_READY",
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(Event)
+                .where(
+                    Event.case_id == case.id,
+                    Event.kind == "CASE_INSIGHT_READY",
+                )
             )
-        ) == 1
+            == 1
+        )
 
 
 def test_case_budget_stop_skips_provider_and_records_fallback(session_factory):

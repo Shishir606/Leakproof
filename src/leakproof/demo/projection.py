@@ -90,6 +90,32 @@ def _safe_event_payload(event: Event) -> dict:
             for key in ("action_type", "provider", "status", "quota_warning")
             if key in payload
         }
+    if event.kind in {
+        "AI_PROPOSED",
+        "AI_PROPOSAL_REJECTED",
+        "POLICY_VALIDATED",
+        "SUPPRESSION_OPENED",
+        "RETRY_DELAYED",
+        "MERCHANT_ALERTED",
+        "NO_ACTION",
+        "AI_DEGRADED",
+    }:
+        return {
+            key: payload[key]
+            for key in (
+                "pattern",
+                "scope",
+                "evidence",
+                "evidence_slice_ids",
+                "confidence",
+                "recommended_action",
+                "ttl_minutes",
+                "reason",
+                "consequence",
+                "actions_delayed",
+            )
+            if key in payload
+        }
     allowed = {
         "amount_at_risk",
         "currency",
@@ -110,7 +136,7 @@ def _source(event: Event) -> str:
         return "browser"
     if evidence_source == "razorpay_webhook":
         return "razorpay"
-    if event.actor == "luna":
+    if event.actor == "luna" or "openai" in event.actor:
         return "openai"
     if "razorpay" in event.actor:
         return "razorpay"

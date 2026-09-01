@@ -36,6 +36,14 @@ function EventItem({ event, terminal }: { event: CaseEvent; terminal: boolean })
     VERIFYING: "Payment signal matched and attribution window checked.",
     CLOSED: `Final outcome: ${String(event.payload.outcome ?? "closed")}.`,
     SUPPRESSED: "Circuit breaker stopped matching recovery work.",
+    AI_PROPOSED: `AI proposed ${label(String(event.payload.recommended_action ?? "No action"))} from a bounded evidence slice.`,
+    AI_PROPOSAL_REJECTED: `Deterministic validation rejected the proposal: ${String(event.payload.reason ?? "unsupported proposal")}.`,
+    POLICY_VALIDATED: "Deterministic policy validated the evidence, scope, confidence, and TTL.",
+    SUPPRESSION_OPENED: "A scoped circuit breaker opened after deterministic validation.",
+    RETRY_DELAYED: "Matching retries were delayed; unrelated cases continue.",
+    MERCHANT_ALERTED: "A scoped merchant alert was recorded.",
+    NO_ACTION: `No cohort actuator ran: ${String(event.payload.reason ?? "no supported intervention")}.`,
+    AI_DEGRADED: "The model was unavailable or invalid; deterministic recovery continued safely.",
     ESCALATED: "Case transferred for human judgement.",
   };
   return (

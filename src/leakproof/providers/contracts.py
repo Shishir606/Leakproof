@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from leakproof.demo.contracts import CaseInsight
 
@@ -109,3 +109,28 @@ class CaseInsightResult:
 @runtime_checkable
 class CaseInsightProvider(Protocol):
     def explain_case(self, request: CaseInsightRequest) -> CaseInsightResult: ...
+
+
+@dataclass(frozen=True)
+class CohortAnalysisRequest:
+    aggregate_payload: dict[str, Any]
+    output_schema: dict[str, Any]
+    model: str
+    max_output_tokens: int
+    instructions: str
+
+
+@dataclass(frozen=True)
+class CohortAnalysisResult:
+    data: Any
+    request_id: str | None
+    input_tokens: int
+    output_tokens: int
+    cost_paise: int
+    latency_ms: int
+    attempts: int = 1
+
+
+@runtime_checkable
+class CohortAnalysisProvider(Protocol):
+    def analyze_cohort(self, request: CohortAnalysisRequest) -> CohortAnalysisResult: ...

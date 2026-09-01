@@ -23,7 +23,7 @@ from leakproof.simulator.scenarios import (
 )
 
 PARAMETERS_PATH = Path("simulator/params.yaml")
-SIMULATOR_SCHEMA_VERSION = 2
+SIMULATOR_SCHEMA_VERSION = 3
 METHODS = ("upi", "card", "netbanking", "wallet", "emandate")
 METHOD_WEIGHTS = (0.42, 0.30, 0.14, 0.09, 0.05)
 ISSUERS = ("HDFC", "ICICI", "SBI", "AXIS", "KOTAK")
@@ -57,6 +57,25 @@ class OrganicOutcome(BaseModel):
     will_recover_without_intervention: bool
     delay_days: float | None
     recovery_at: datetime | None
+
+
+class SimulatedPaymentAttempt(BaseModel):
+    """A synthetic aggregate fact; deliberately contains no customer identifier."""
+
+    model_config = ConfigDict(frozen=True)
+
+    attempt_key: str
+    provider_event_key: str
+    provider_payment_id: str | None = None
+    provider_order_id: str | None = None
+    observed_at: datetime
+    outcome: str
+    method: str = "unknown"
+    issuer: str = "unknown"
+    bin_bucket: str = "unknown"
+    checkout_step: str = "unknown"
+    checkout_version: str = "unknown"
+    error_reason: str = "unknown"
 
 
 class SimulatedSignal(BaseModel):
@@ -119,6 +138,7 @@ class SimulationDataset(BaseModel):
     parameter_sha256: str
     customers: list[SimulatedCustomer]
     signals: list[SimulatedSignal]
+    attempt_observations: list[SimulatedPaymentAttempt] = Field(default_factory=list)
 
     def fingerprint(self) -> str:
         serialized = json.dumps(
@@ -144,19 +164,16 @@ class SimulationDataset(BaseModel):
             "as_of": self.as_of.isoformat(),
             "merchant_id": self.merchant_id,
             "customers": len(self.customers),
-            "b2b_invoice_customers": sum(
-                customer.segment == "B2B" for customer in self.customers
-            ),
+            "b2b_invoice_customers": sum(customer.segment == "B2B" for customer in self.customers),
             "months_of_history": self.months_of_history,
             "historical_orders": sum(
                 customer.historical_order_count for customer in self.customers
             ),
             "at_risk_cases": len(self.signals),
+            "payment_attempt_observations": len(self.attempt_observations),
             "amount_at_risk_paise": sum(signal.amount_at_risk for signal in self.signals),
             "leak_type_counts": dict(sorted(leak_counts.items())),
-            "scenario_counts": {
-                scenario: scenario_counts[scenario] for scenario in SCENARIO_NAMES
-            },
+            "scenario_counts": {scenario: scenario_counts[scenario] for scenario in SCENARIO_NAMES},
             "baseline_breadth_cases": scenario_counts["baseline"],
             "organic_recovery_count": sum(organic_counts.values()),
             "organic_recovery_by_leak_type": {
@@ -382,9 +399,7 @@ def generate_dataset(
     # Version the synthetic identity namespace as well as the parameter hash. This keeps a
     # persistent database from silently reusing cases created by an older simulator contract.
     stable_suffix = f"{parameters.simulation.seed}_{parameter_hash[:8]}"
-    run_suffix = (
-        f"v{SIMULATOR_SCHEMA_VERSION}_{parameters.simulation.seed}_{parameter_hash[:8]}"
-    )
+    run_suffix = f"v{SIMULATOR_SCHEMA_VERSION}_{parameters.simulation.seed}_{parameter_hash[:8]}"
     run_id = f"sim_{run_suffix}"
     merchant_id = f"merchant_{run_id}"
     rng = Random(parameters.simulation.seed)
@@ -411,6 +426,60 @@ def generate_dataset(
         )
         for sequence, spec in enumerate([*scenario_specs, *breadth_specs])
     ]
+    outage = [item for item in signals if item.scenario == "issuer_outage"]
+    outage_config = parameters.scenarios.issuer_outage
+    current_attempts = round(len(outage) / outage_config.failure_rate)
+    attempt_observations = [
+        SimulatedPaymentAttempt(
+            attempt_key=f"payment:{item.entity_id}",
+            provider_event_key=f"sim_evt_failure_{index}",
+            provider_payment_id=item.entity_id,
+            provider_order_id=item.entity_root_id,
+            observed_at=item.occurred_at,
+            outcome="failure",
+            method=outage_config.method,
+            issuer=outage_config.issuer,
+            checkout_step="payment_authorization",
+            error_reason="gateway_technical_error",
+        )
+        for index, item in enumerate(outage)
+    ]
+    outage_start = min(item.occurred_at for item in outage)
+    outage_end = max(item.occurred_at for item in outage)
+    for index in range(current_attempts - len(outage)):
+        observed_at = outage_start + (outage_end - outage_start) * (
+            (index + 1) / (current_attempts - len(outage) + 1)
+        )
+        attempt_observations.append(
+            SimulatedPaymentAttempt(
+                attempt_key=f"success:order:sim_outage_success_{index}",
+                provider_event_key=f"sim_evt_success_{index}",
+                provider_payment_id=f"pay_sim_outage_success_{index}",
+                provider_order_id=f"order_sim_outage_success_{index}",
+                observed_at=observed_at,
+                outcome="success",
+                method=outage_config.method,
+                issuer=outage_config.issuer,
+            )
+        )
+    # A separately observed historical comparison window makes the injected incident
+    # reproducible without declaring a rate or deriving a denominator from failure cases.
+    baseline_attempts = 100
+    baseline_failures = 4
+    for index in range(baseline_attempts):
+        failed = index < baseline_failures
+        attempt_observations.append(
+            SimulatedPaymentAttempt(
+                attempt_key=f"baseline:{index}",
+                provider_event_key=f"sim_evt_baseline_{index}",
+                observed_at=outage_start - timedelta(days=1) + timedelta(seconds=index),
+                outcome="failure" if failed else "success",
+                method=outage_config.method,
+                issuer=outage_config.issuer,
+                checkout_step="payment_authorization" if failed else "unknown",
+                error_reason="gateway_technical_error" if failed else "unknown",
+            )
+        )
     return SimulationDataset(
         run_id=run_id,
         seed=parameters.simulation.seed,
@@ -421,4 +490,5 @@ def generate_dataset(
         parameter_sha256=parameter_hash,
         customers=customers,
         signals=signals,
+        attempt_observations=attempt_observations,
     )

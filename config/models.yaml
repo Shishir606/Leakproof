@@ -2,9 +2,7 @@ routes:
   case_insight:
     primary: {model: gpt-5.6-luna, max_tokens: 600}
   cohort_scan:
-    primary: {model: small, max_tokens: 1200}
-    escalate_if: {confidence_below: 0.70, schema_violation: true}
-    escalate_to: {model: large, max_tokens: 2000}
+    primary: {model: gpt-5.6-luna, max_tokens: 1200}
   draft_fill:
     primary: {model: small}
   voice_turn:

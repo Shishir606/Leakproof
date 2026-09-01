@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from leakproof.models.domain import LeakType
@@ -17,10 +18,75 @@ def _occurred_at(payload: dict, entity: dict) -> datetime:
     )
 
 
+@dataclass(frozen=True)
+class NormalizedPaymentAttempt:
+    merchant_id: str
+    provider_event_key: str
+    attempt_key: str
+    provider_payment_id: str | None
+    provider_order_id: str | None
+    observed_at: datetime
+    outcome: str
+    method: str
+    issuer: str
+    bin_bucket: str
+    checkout_step: str
+    checkout_version: str
+    error_reason: str
+
+
+def _safe_dimension(value: object) -> str:
+    if value is None or value == "":
+        return "unknown"
+    return str(value)[:160]
+
+
+def normalize_razorpay_attempt(
+    merchant_id: str, payload: dict, provider_event_key: str
+) -> NormalizedPaymentAttempt | None:
+    """Extract non-customer aggregate facts from a verified payment webhook."""
+    event = payload.get("event")
+    if event not in {"payment.failed", "payment.captured", "order.paid"}:
+        return None
+    payment = _entity(payload, "payment")
+    order = _entity(payload, "order")
+    entity = payment if payment else order
+    payment_id = str(payment["id"]) if payment.get("id") else None
+    order_id_value = payment.get("order_id") or order.get("id")
+    order_id = str(order_id_value) if order_id_value else None
+    outcome = "failure" if event == "payment.failed" else "success"
+    if outcome == "success" and order_id:
+        attempt_key = f"success:order:{order_id}"
+    elif payment_id:
+        attempt_key = f"payment:{payment_id}"
+    elif order_id:
+        attempt_key = f"order:{order_id}"
+    else:
+        attempt_key = f"event:{provider_event_key}"
+    card = payment.get("card") if isinstance(payment.get("card"), dict) else {}
+    notes = entity.get("notes") if isinstance(entity.get("notes"), dict) else {}
+    return NormalizedPaymentAttempt(
+        merchant_id=merchant_id,
+        provider_event_key=provider_event_key,
+        attempt_key=attempt_key,
+        provider_payment_id=payment_id,
+        provider_order_id=order_id,
+        observed_at=_occurred_at(payload, entity),
+        outcome=outcome,
+        method=_safe_dimension(payment.get("method")),
+        issuer=_safe_dimension(payment.get("bank") or card.get("issuer")),
+        bin_bucket=_safe_dimension(card.get("iin") or card.get("bin")),
+        checkout_step=_safe_dimension(payment.get("error_step") or notes.get("checkout_step")),
+        checkout_version=_safe_dimension(notes.get("checkout_version")),
+        error_reason=_safe_dimension(payment.get("error_reason")),
+    )
+
+
 def normalize_razorpay(merchant_id: str, payload: dict) -> NormalizedSignal | None:
     event = payload.get("event")
     if event == "payment.failed":
         entity = _entity(payload, "payment")
+        card = entity.get("card") if isinstance(entity.get("card"), dict) else {}
         entity_id = str(entity["id"])
         order_id = entity.get("order_id")
         customer_id = entity.get("customer_id") or entity.get("notes", {}).get("customer_id")
@@ -45,6 +111,15 @@ def normalize_razorpay(merchant_id: str, payload: dict) -> NormalizedSignal | No
                     "method",
                 )
                 if entity.get(key) is not None
+            }
+            | {
+                key: value
+                for key, value in {
+                    "issuer": entity.get("bank") or card.get("issuer"),
+                    "bin": card.get("iin") or card.get("bin"),
+                    "checkout_step": entity.get("error_step"),
+                }.items()
+                if value is not None
             },
             occurred_at=_occurred_at(payload, entity),
         )
