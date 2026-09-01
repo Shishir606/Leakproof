@@ -16,6 +16,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cohort", type=Path, default=Path("evals/cohort/cases.jsonl"))
     parser.add_argument("--injection", type=Path, default=Path("evals/injection/corpus.jsonl"))
+    parser.add_argument("--decision", type=Path, default=Path("evals/decision_quality/cases.jsonl"))
     parser.add_argument("--baseline", type=Path, default=Path("evals/baseline.json"))
     parser.add_argument("--report", type=Path, default=Path("evals/report.json"))
     parser.add_argument("--no-persist", action="store_true")
@@ -25,6 +26,7 @@ def main() -> None:
         report = run_all_evals(
             cohort_path=arguments.cohort,
             injection_path=arguments.injection,
+            decision_path=arguments.decision,
             baseline_path=arguments.baseline,
             report_path=arguments.report,
         )
@@ -35,6 +37,7 @@ def main() -> None:
                 report = run_all_evals(
                     cohort_path=arguments.cohort,
                     injection_path=arguments.injection,
+                    decision_path=arguments.decision,
                     baseline_path=arguments.baseline,
                     report_path=arguments.report,
                     session=session,

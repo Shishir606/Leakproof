@@ -24,8 +24,13 @@ export type Scoreboard = {
   organic_holdout_paise: number;
   counterfactual_organic_paise: number;
   incremental_recovered_paise: number;
+  incremental_revenue_paise: number;
+  contribution_margin_paise: number;
   intervention_cost_paise: number;
   llm_cost_paise: number;
+  human_review_cost_paise: number;
+  included_optional_cost_paise: number;
+  net_economic_value_paise: number;
   net_value_created_paise: number;
   contacts: number;
   contacts_per_1000_rupees_recovered: number;
@@ -36,6 +41,33 @@ export type Scoreboard = {
   escalated_to_human: number;
   unresolved_exceptions: number;
   estimator: string;
+  assumption_hash: string;
+  seed_count: number;
+  assumptions: {
+    contribution_margin_rate: number;
+    human_review_unit_cost_paise: number;
+    included_optional_costs_paise_per_case: Record<string, number>;
+    excluded_costs: string[];
+    holdout_fraction: number;
+    attribution_windows_days: Record<string, number>;
+    intervention_effects: Record<string, unknown>;
+  };
+  uncertainty: {
+    confidence_level: number;
+    method: string;
+    lift_percentage_points: EstimateInterval;
+    incremental_revenue_paise: EstimateInterval;
+    contribution_margin_paise: EstimateInterval;
+    net_economic_value_paise: EstimateInterval;
+  };
+};
+
+export type EstimateInterval = {
+  median: number;
+  minimum: number;
+  maximum: number;
+  interval_low: number;
+  interval_high: number;
 };
 
 export type CaseListItem = {

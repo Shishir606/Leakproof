@@ -23,7 +23,7 @@ from leakproof.simulator.scenarios import (
 )
 
 PARAMETERS_PATH = Path("simulator/params.yaml")
-SIMULATOR_SCHEMA_VERSION = 3
+SIMULATOR_SCHEMA_VERSION = 4
 METHODS = ("upi", "card", "netbanking", "wallet", "emandate")
 METHOD_WEIGHTS = (0.42, 0.30, 0.14, 0.09, 0.05)
 ISSUERS = ("HDFC", "ICICI", "SBI", "AXIS", "KOTAK")
@@ -136,6 +136,7 @@ class SimulationDataset(BaseModel):
     merchant_name: str
     months_of_history: int
     parameter_sha256: str
+    treatment_effects: dict[str, Any]
     customers: list[SimulatedCustomer]
     signals: list[SimulatedSignal]
     attempt_observations: list[SimulatedPaymentAttempt] = Field(default_factory=list)
@@ -396,9 +397,17 @@ def generate_dataset(
         separators=(",", ":"),
     ).encode()
     parameter_hash = hashlib.sha256(serialized_parameters).hexdigest()
+    # Sensitivity scenarios must be paired: holdout assignment and outcome draws stay fixed
+    # while only the treatment-effect threshold changes. The full parameter hash still creates
+    # a distinct persisted run namespace for every multiplier.
+    paired_parameters = parameters.model_dump(mode="json", by_alias=True)
+    paired_parameters.pop("treatment_effect", None)
+    paired_hash = hashlib.sha256(
+        json.dumps(paired_parameters, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
     # Version the synthetic identity namespace as well as the parameter hash. This keeps a
     # persistent database from silently reusing cases created by an older simulator contract.
-    stable_suffix = f"{parameters.simulation.seed}_{parameter_hash[:8]}"
+    stable_suffix = f"{parameters.simulation.seed}_{paired_hash[:8]}"
     run_suffix = f"v{SIMULATOR_SCHEMA_VERSION}_{parameters.simulation.seed}_{parameter_hash[:8]}"
     run_id = f"sim_{run_suffix}"
     merchant_id = f"merchant_{run_id}"
@@ -488,6 +497,7 @@ def generate_dataset(
         merchant_name=parameters.simulation.merchant_name,
         months_of_history=parameters.scale.months,
         parameter_sha256=parameter_hash,
+        treatment_effects=parameters.treatment_effect.model_dump(mode="json"),
         customers=customers,
         signals=signals,
         attempt_observations=attempt_observations,

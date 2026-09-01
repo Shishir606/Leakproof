@@ -207,12 +207,14 @@ class DemoSessionProjection(StrictContract):
     email_mode: EmailMode
     case: CaseProjection | None = None
     recovery_url_available: bool = False
+    recovery_path: str | None = Field(default=None, pattern=r"^/recover/[A-Za-z0-9_.-]+$")
     gate_verdict: str | None = None
     recovery_actions: list[RecoveryActionProjection] = Field(default_factory=list)
     provider_statuses: list[ProviderStatus] = Field(default_factory=list)
     timeline: list[TimelineItem] = Field(default_factory=list)
     end_to_end_latency_seconds: float | None = Field(default=None, ge=0)
     metrics: OperationalMetrics
+    environment_metrics: OperationalMetrics
 
 
 class AcceptanceSessionSummary(StrictContract):

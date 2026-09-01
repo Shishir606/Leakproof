@@ -53,12 +53,12 @@ exception ledger. These are synthetic measurements from the assumptions in
 |---|---:|
 | Treatment recovery rate | 22.61% (161 / 712) |
 | Holdout recovery rate | 14.67% (11 / 75) |
-| Measured lift | **+7.95 pp** |
-| Gross treatment recovery | ₹99,26,100.51 |
+| Simulated treatment-vs-holdout lift estimate | **+7.95 pp (single seed)** |
+| Simulated gross recovery | ₹99,26,100.51 |
 | Stratified organic counterfactual | ₹71,05,521.53 |
 | Incremental recovery | **₹28,20,578.98** |
 | Intervention + model cost | ₹31.22 |
-| Net value created | **₹28,20,547.76** |
+| Simulated net economic-value estimate | **Calculated from incremental revenue × declared contribution margin, less declared costs** |
 | False chases | **0** |
 | Scoped issuer-outage suppressions | **47 / 47** |
 | Prompt-injection bypasses | **0 / 64** |
@@ -139,7 +139,7 @@ missing-configuration, and per-case budget failures produce deterministic guidan
 the signed recovery path. Run this checkpoint with `make test-api-september-1`.
 
 The 2 September checkpoint adds the live-only Resend ladder. Each detected demo case gets one
-registered recovery email action 30 demo seconds after its immediate in-app link. Addresses are
+registered recovery email action 7 demo seconds after its immediate in-app link. Addresses are
 encrypted at rest and decrypted only immediately before sending; missing or non-allowlisted
 recipients, the rolling five-per-address limit, and daily/monthly free-tier ceilings all fall back
 to a safe preview without a provider call. Resend requests use the action idempotency key, while
@@ -352,11 +352,13 @@ still closes the case and cancels pending work, but creates no attribution row, 
 cannot claim it as recovered revenue. Each successful intervention moves the window forward from
 that touch.
 
-`GET /scoreboard/{run_id}` reports treated and holdout recovery rates, percentage-point lift,
-gross and holdout recovery, a stratum-weighted organic counterfactual, incremental recovery,
-intervention and model costs, net value, contact efficiency, opt-outs, false chases, suppressions,
-human escalations, EV declines, and unresolved exceptions. Money is returned in paise and the
-estimator name is included in the response.
+`GET /scoreboard/{run_id}` separates gross recovered revenue, incremental revenue, contribution
+margin, and net economic value. It includes intervention, model, human-review, and declared optional
+costs plus the estimator, assumption hash, seed count, strict assumptions, and uncertainty object.
+The single-run API declares point uncertainty honestly; `scripts/run_sensitivity.py` uses an
+isolated temporary database to report empirical median, min/max, and 80% intervals across several
+seeds and exactly three treatment-effect multipliers. No live table is touched; the committed
+five-seed output is [`samples/day3-sensitivity.json`](samples/day3-sensitivity.json).
 
 Run the August 31 acceptance slice alone:
 
@@ -366,12 +368,19 @@ make test-august-31
 
 ## September 1: cohort and adversarial evaluation harness
 
-`make evals` runs two reproducible, committed corpora. The cohort suite contains 120 aggregate
+`make evals` runs three reproducible, committed corpora. The generated cohort suite is retained as
+`simulator_regression`, not described as generalization. It contains 120 aggregate
 windows: 40 labeled anomalies across all five supported patterns, 50 threshold near-misses, and
 30 clean windows. It reports precision, recall, and F1 per pattern and overall, and fails when F1
 regresses by more than two percentage points from the last passing persisted run or when the
 false-suppression rate exceeds 5%. The default offline transport is deterministic, so this gate is
 free and repeatable; it evaluates the simulation transport, not the quality of a hosted model.
+
+The separate `decision_quality` suite is a frozen, manually authored set with separately reviewed
+AI proposal captures. It reports rules-only, raw-AI, and AI-plus-deterministic-validator results for
+root-cause F1, exact scope, recommendation quality, unsupported evidence, false suppression, schema
+validity, safe fallback, cost, and latency. Safety gates are strict; quality must exceed the recorded
+rules baseline by the declared margin.
 
 The injection suite contains 64 untrusted-text payloads across instruction overrides, fake system
 messages, tool abuse, guardrail bypasses, exfiltration requests, multilingual attacks, encoded
@@ -392,8 +401,9 @@ make evals
 ## September 2: recordable scoreboard and case timeline
 
 The Next.js dashboard ships the two screens on the demo critical path. The Scoreboard reads the
-latest measured batch and separates gross recovery from the stratified holdout counterfactual,
-incremental recovery, intervention and model costs, and net value. It also shows throughput, the
+latest measured batch and separates simulated gross recovery from the stratified holdout
+counterfactual, incremental revenue, contribution margin, declared costs, and simulated net
+economic-value estimate. It also shows assumptions, excluded costs, throughput, the
 five leak surfaces, false chases, circuit-breaker suppressions, EV declines, human escalations,
 unresolved exceptions, and the latest retained evaluation status. Synthetic runs are labelled on
 screen rather than presented as production outcomes.

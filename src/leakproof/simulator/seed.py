@@ -45,6 +45,7 @@ def persist_dataset(session: Session, dataset: SimulationDataset) -> PersistedSi
                 "simulation_run_id": dataset.run_id,
                 "simulation_seed": dataset.seed,
                 "simulation_parameter_sha256": dataset.parameter_sha256,
+                "simulation_treatment_effects": dataset.treatment_effects,
             },
         )
         session.add(merchant)

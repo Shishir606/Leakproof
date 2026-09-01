@@ -24,7 +24,11 @@ from leakproof.demo.security import (
     SessionTokenExpired,
     verify_session_token,
 )
-from leakproof.demo.service import DemoSessionExpired, DemoSessionUnauthorized
+from leakproof.demo.service import (
+    DemoSessionExpired,
+    DemoSessionUnauthorized,
+    issue_demo_recovery_token,
+)
 from leakproof.models.db import (
     Action,
     CaseInsightRecord,
@@ -324,6 +328,17 @@ def get_demo_session_projection(
         and DemoSessionState(demo.state)
         in {DemoSessionState.AT_RISK, DemoSessionState.CHECKOUT_OPEN}
     )
+    recovery_path = None
+    if recovery_url_available:
+        recovery_token = issue_demo_recovery_token(
+            session,
+            demo.id,
+            settings=settings,
+            now=now,
+        )
+        # The token is returned only to the authenticated session projection. It is never
+        # persisted in provider metadata, event payloads, logs, or acceptance exports.
+        recovery_path = f"/recover/{recovery_token}"
     recovery_actions: list[RecoveryActionProjection] = []
     if case is not None:
         recovery_actions.append(
@@ -443,12 +458,44 @@ def get_demo_session_projection(
             else None
         ),
         recovery_url_available=recovery_url_available,
+        recovery_path=recovery_path,
         gate_verdict=latest_gate,
         recovery_actions=recovery_actions,
         provider_statuses=provider_statuses,
         timeline=timeline,
         end_to_end_latency_seconds=end_to_end_latency,
         metrics=OperationalMetrics(
+            cases_detected=int(case is not None),
+            recovered_cases=int(
+                case is not None and DemoSessionState(demo.state) == DemoSessionState.RECOVERED
+            ),
+            recovered_amount_paise=(
+                demo.amount_paise
+                if case is not None and DemoSessionState(demo.state) == DemoSessionState.RECOVERED
+                else 0
+            ),
+            recovery_rate=(
+                1.0
+                if case is not None and DemoSessionState(demo.state) == DemoSessionState.RECOVERED
+                else 0.0
+            ),
+            median_recovery_time_seconds=(
+                end_to_end_latency
+                if case is not None and DemoSessionState(demo.state) == DemoSessionState.RECOVERED
+                else None
+            ),
+            provider_failures=sum(call.status == "failed" for call in provider_calls),
+            luna_cost_paise=sum(
+                row.cost_paise
+                for row in session.scalars(
+                    select(LLMCall).where(
+                        LLMCall.case_id == (case.id if case else "__no_case__"),
+                        LLMCall.purpose == "case_insight",
+                    )
+                )
+            ),
+        ),
+        environment_metrics=OperationalMetrics(
             cases_detected=len(live_cases),
             recovered_cases=len(recovered),
             recovered_amount_paise=sum(item.amount_at_risk for item in recovered),

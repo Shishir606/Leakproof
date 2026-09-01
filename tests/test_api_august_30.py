@@ -287,7 +287,7 @@ def test_dismissal_route_enqueues_once_and_duplicate_is_safe(client, monkeypatch
     assert scheduled == [
         {
             "args": [created["session_id"], first.json()["event_id"]],
-            "countdown": 30,
+                "countdown": 7,
         }
     ]
 

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 
 from leakproof.config import Settings
 from leakproof.demo import CheckoutEventRequest, DemoSessionCreateRequest
+from leakproof.demo.acceptance import build_demo_acceptance_export
 from leakproof.demo.email import execute_demo_recovery_email, schedule_demo_recovery_email
 from leakproof.demo.insights import generate_case_insight
 from leakproof.demo.projection import get_demo_session_projection
@@ -148,6 +150,8 @@ def test_live_projection_exposes_dashboard_decisions_receipts_and_sanitized_sour
             "email_link",
         ]
         assert projection.recovery_actions[0].status == "available"
+        assert projection.recovery_path is not None
+        recovery_token = projection.recovery_path.removeprefix("/recover/")
         assert projection.recovery_actions[1].provider_receipt_id == sent.provider_email_id
         assert {item.source for item in projection.timeline} >= {
             "browser",
@@ -161,6 +165,17 @@ def test_live_projection_exposes_dashboard_decisions_receipts_and_sanitized_sour
         assert "TREATMENT" not in serialized
         assert "holdout" not in serialized.casefold()
         assert "simulation" not in serialized.casefold()
+        assert recovery_token not in json.dumps(
+            [item.model_dump(mode="json") for item in projection.timeline]
+        )
+        acceptance = build_demo_acceptance_export(
+            session,
+            created.session_id,
+            session_token=created.session_token,
+            settings=config,
+            now=NOW + timedelta(seconds=45),
+        )
+        assert recovery_token not in acceptance.model_dump_json()
 
 
 def test_success_stops_live_polling_state_and_reports_verified_recovery(session_factory):
@@ -202,7 +217,72 @@ def test_success_stops_live_polling_state_and_reports_verified_recovery(session_
         assert projection.state == "RECOVERED"
         assert projection.case.state == "CLOSED"
         assert projection.recovery_url_available is False
+        assert projection.recovery_path is None
         assert projection.metrics.recovered_cases == 1
         assert projection.metrics.recovered_amount_paise == 50_000
         assert projection.metrics.recovery_rate == 1
         assert projection.end_to_end_latency_seconds == 118
+
+
+def test_current_session_metrics_cannot_be_changed_by_global_recovery_history(
+    session_factory,
+):
+    config = settings()
+    provider = FakePaymentProvider()
+    with session_factory() as session:
+        recovered_session = create_demo_session(
+            session,
+            DemoSessionCreateRequest(),
+            client_ip="203.0.113.95",
+            provider=provider,
+            limiter=InMemoryRateLimiter(),
+            settings=config,
+            now=NOW,
+        )
+        first_failure = persist_webhook(
+            session,
+            merchant_id=config.default_merchant_id,
+            payload=failure_payload(recovered_session.razorpay_order_id),
+            header_event_id="evt-history-failure",
+        )
+        process_stored_webhook(session, first_failure.id)
+        first_paid = persist_webhook(
+            session,
+            merchant_id=config.default_merchant_id,
+            payload=captured_payload(recovered_session.razorpay_order_id),
+            header_event_id="evt-history-captured",
+        )
+        process_stored_webhook(session, first_paid.id)
+
+        active_session = create_demo_session(
+            session,
+            DemoSessionCreateRequest(),
+            client_ip="203.0.113.96",
+            provider=provider,
+            limiter=InMemoryRateLimiter(),
+            settings=config,
+            now=NOW + timedelta(minutes=4),
+        )
+        second_payload = failure_payload(active_session.razorpay_order_id)
+        second_payload["payload"]["payment"]["entity"]["id"] = "pay_active_session"
+        second_failure = persist_webhook(
+            session,
+            merchant_id=config.default_merchant_id,
+            payload=second_payload,
+            header_event_id="evt-active-failure",
+        )
+        process_stored_webhook(session, second_failure.id)
+        projection = get_demo_session_projection(
+            session,
+            active_session.session_id,
+            session_token=active_session.session_token,
+            settings=config,
+            now=NOW + timedelta(minutes=5),
+        )
+
+        assert projection.state == "AT_RISK"
+        assert projection.metrics.cases_detected == 1
+        assert projection.metrics.recovered_cases == 0
+        assert projection.metrics.recovered_amount_paise == 0
+        assert projection.environment_metrics.recovered_cases == 1
+        assert projection.environment_metrics.recovered_amount_paise == 50_000

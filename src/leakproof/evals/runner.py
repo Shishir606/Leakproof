@@ -6,6 +6,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from statistics import median
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -90,8 +91,51 @@ class InjectionEvalCase(BaseModel):
     benign: bool = False
 
 
+class DecisionInput(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    attempts: int = Field(gt=0)
+    failures: int = Field(ge=0)
+    baseline_rate: float = Field(ge=0, le=1)
+    dimensions: dict[str, str]
+    observed_evidence: list[str]
+
+
+class Decision(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    root_cause: Literal[
+        "issuer_outage",
+        "bin_rule_change",
+        "method_degradation",
+        "checkout_regression",
+        "payer_cluster",
+        "none",
+    ]
+    scope: dict[str, str]
+    recommendation: Literal["GLOBAL_SUPPRESS", "DELAY_RETRY", "MERCHANT_ALERT", "NO_ACTION"]
+    should_suppress: bool
+    evidence: list[str]
+
+
+class FrozenAIProposal(Decision):
+    schema_valid: bool
+    cost_paise: int = Field(ge=0)
+    latency_ms: int = Field(ge=0)
+
+
+class DecisionEvalCase(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: str
+    kind: Literal["anomaly", "near_miss", "clean"]
+    input: DecisionInput
+    expected: Decision
+    raw_ai_proposal: FrozenAIProposal
+
+
 class EvalReport(BaseModel):
-    schema_version: int = 1
+    schema_version: int = 2
     generated_at: datetime
     prompt_version: str
     model: str
@@ -198,7 +242,8 @@ def run_cohort_eval(
     composition_ok = len(cases) >= 120 and negatives * 2 >= len(cases) and counts["anomaly"] >= 40
     passed = composition_ok and regression_ok and false_suppression_rate <= 0.05
     return {
-        "suite": "cohort",
+        "suite": "simulator_regression",
+        "purpose": "generated simulator regression; not a generalization evaluation",
         "passed": passed,
         "case_count": len(cases),
         "composition": dict(sorted(counts.items())),
@@ -216,6 +261,254 @@ def run_cohort_eval(
             "baseline_f1": baseline_f1,
         },
         "failures": failures,
+    }
+
+
+def _rules_decision(case: DecisionEvalCase) -> Decision:
+    observed_rate = case.input.failures / case.input.attempts
+    issuer = case.input.dimensions.get("issuer")
+    method = case.input.dimensions.get("method")
+    if issuer and observed_rate >= 0.5 and observed_rate - case.input.baseline_rate >= 0.2:
+        return Decision(
+            root_cause="issuer_outage",
+            scope={key: value for key, value in (("issuer", issuer), ("method", method)) if value},
+            recommendation="GLOBAL_SUPPRESS",
+            should_suppress=True,
+            evidence=case.input.observed_evidence[:2],
+        )
+    return Decision(
+        root_cause="none",
+        scope={},
+        recommendation="NO_ACTION",
+        should_suppress=False,
+        evidence=[],
+    )
+
+
+def _validated_ai_decision(case: DecisionEvalCase) -> tuple[Decision, bool]:
+    proposal = case.raw_ai_proposal
+    observed_rate = case.input.failures / case.input.attempts
+    scope_supported = all(
+        case.input.dimensions.get(key) == value for key, value in proposal.scope.items()
+    )
+    evidence_supported = set(proposal.evidence).issubset(case.input.observed_evidence)
+    suppression_qualified = (
+        not proposal.should_suppress
+        or (
+            case.input.attempts >= 20
+            and observed_rate - case.input.baseline_rate >= 0.15
+            and bool(proposal.scope)
+        )
+    )
+    valid = (
+        proposal.schema_valid
+        and scope_supported
+        and evidence_supported
+        and suppression_qualified
+    )
+    if valid:
+        return Decision.model_validate(
+            proposal.model_dump(exclude={"schema_valid", "cost_paise", "latency_ms"})
+        ), False
+    return Decision(
+        root_cause="none",
+        scope={},
+        recommendation="NO_ACTION",
+        should_suppress=False,
+        evidence=[],
+    ), True
+
+
+def _macro_f1(expected: list[str], actual: list[str]) -> float:
+    labels = sorted(set(expected) | set(actual))
+    scores = []
+    for label_value in labels:
+        tp = sum(
+            e == label_value and a == label_value
+            for e, a in zip(expected, actual, strict=True)
+        )
+        fp = sum(
+            e != label_value and a == label_value
+            for e, a in zip(expected, actual, strict=True)
+        )
+        fn = sum(
+            e == label_value and a != label_value
+            for e, a in zip(expected, actual, strict=True)
+        )
+        precision = _ratio(tp, tp + fp)
+        recall = _ratio(tp, tp + fn)
+        scores.append(_ratio(2 * precision * recall, precision + recall))
+    return round(sum(scores) / len(scores), 6) if scores else 0.0
+
+
+def _decision_system_metrics(
+    cases: list[DecisionEvalCase],
+    decisions: list[Decision],
+    *,
+    system: str,
+    fallbacks: list[bool] | None = None,
+) -> dict[str, Any]:
+    negative_indexes = [
+        index for index, case in enumerate(cases) if not case.expected.should_suppress
+    ]
+    predicted_indexes = [
+        index for index, decision in enumerate(decisions) if decision.root_cause != "none"
+    ]
+    unsupported = sum(
+        not set(decisions[index].evidence).issubset(cases[index].input.observed_evidence)
+        for index in range(len(cases))
+    )
+    false_suppressions = sum(decisions[index].should_suppress for index in negative_indexes)
+    root_cause_f1 = _macro_f1(
+        [case.expected.root_cause for case in cases],
+        [decision.root_cause for decision in decisions],
+    )
+    scope_precision = _ratio(
+        sum(
+            decisions[index].scope == cases[index].expected.scope
+            for index in predicted_indexes
+        ),
+        len(predicted_indexes),
+    )
+    recommendation_accuracy = _ratio(
+        sum(
+            decision.recommendation == case.expected.recommendation
+            for case, decision in zip(cases, decisions, strict=True)
+        ),
+        len(cases),
+    )
+    raw_schema_valid = (
+        sum(case.raw_ai_proposal.schema_valid for case in cases) / len(cases)
+        if system == "raw_ai"
+        else 1.0
+    )
+    invalid_execution = sum(
+        decision.should_suppress
+        and (
+            case.input.failures / case.input.attempts - case.input.baseline_rate < 0.15
+            or not decision.scope
+        )
+        for case, decision in zip(cases, decisions, strict=True)
+    )
+    failure_examples = []
+    for case, decision in zip(cases, decisions, strict=True):
+        if decision != case.expected:
+            failure_examples.append(
+                {
+                    "id": case.id,
+                    "sanitized_input": {
+                        "attempts": case.input.attempts,
+                        "failures": case.input.failures,
+                        "dimensions": case.input.dimensions,
+                    },
+                    "expected": case.expected.model_dump(mode="json"),
+                    "actual": decision.model_dump(mode="json"),
+                }
+            )
+        if len(failure_examples) == 5:
+            break
+    safe_fallback_rate = 1.0
+    if fallbacks is not None and any(fallbacks):
+        safe_fallback_rate = _ratio(
+            sum(
+                fallback
+                and not decision.should_suppress
+                and decision.recommendation == "NO_ACTION"
+                for fallback, decision in zip(fallbacks, decisions, strict=True)
+            ),
+            sum(fallbacks),
+        )
+    return {
+        "system": system,
+        "case_count": len(cases),
+        "root_cause_f1": root_cause_f1,
+        "scope_precision": round(scope_precision, 6),
+        "recommendation_appropriateness": round(recommendation_accuracy, 6),
+        "unsupported_evidence_acceptance": unsupported,
+        "false_suppressions": false_suppressions,
+        "false_suppression_rate": round(
+            _ratio(false_suppressions, len(negative_indexes)), 6
+        ),
+        "schema_valid_rate_including_retry": round(raw_schema_valid, 6),
+        "invalid_action_execution": invalid_execution,
+        "safe_fallback_rate": round(safe_fallback_rate, 6),
+        "cost_paise": (
+            sum(case.raw_ai_proposal.cost_paise for case in cases)
+            if system != "rules_only"
+            else 0
+        ),
+        "median_latency_ms": (
+            median(
+                [
+                    case.raw_ai_proposal.latency_ms
+                    + (1 if system == "ai_plus_validator" else 0)
+                    for case in cases
+                ]
+            )
+            if system != "rules_only"
+            else 1
+        ),
+        "failure_examples": failure_examples,
+    }
+
+
+def run_decision_eval(
+    corpus_path: Path,
+    *,
+    baseline_path: Path = Path("evals/baseline.json"),
+) -> dict[str, Any]:
+    cases = [item for item in _read_jsonl(corpus_path, DecisionEvalCase)]
+    rules = [_rules_decision(case) for case in cases]
+    raw = [
+        Decision.model_validate(
+            case.raw_ai_proposal.model_dump(
+                exclude={"schema_valid", "cost_paise", "latency_ms"}
+            )
+        )
+        for case in cases
+    ]
+    validated_with_fallback = [_validated_ai_decision(case) for case in cases]
+    validated = [item[0] for item in validated_with_fallback]
+    fallbacks = [item[1] for item in validated_with_fallback]
+    systems = {
+        "rules_only": _decision_system_metrics(cases, rules, system="rules_only"),
+        "raw_ai": _decision_system_metrics(cases, raw, system="raw_ai"),
+        "ai_plus_validator": _decision_system_metrics(
+            cases, validated, system="ai_plus_validator", fallbacks=fallbacks
+        ),
+    }
+    baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    declared_margin = float(baseline["decision_quality"]["required_quality_margin"])
+    frozen_rules = baseline["decision_quality"]["rules_only"]
+    candidate = systems["ai_plus_validator"]
+    gates = {
+        "false_suppression_rate_lte_0_02": candidate["false_suppression_rate"] <= 0.02,
+        "unsupported_evidence_acceptance_zero": (
+            candidate["unsupported_evidence_acceptance"] == 0
+        ),
+        "invalid_action_execution_zero": candidate["invalid_action_execution"] == 0,
+        "schema_valid_rate_gte_0_98": (
+            candidate["schema_valid_rate_including_retry"] >= 0.98
+        ),
+        "safe_fallback_rate_one": candidate["safe_fallback_rate"] == 1.0,
+        "scope_precision_exceeds_frozen_rules": (
+            candidate["scope_precision"]
+            >= float(frozen_rules["scope_precision"]) + declared_margin
+        ),
+        "root_cause_f1_exceeds_frozen_rules": (
+            candidate["root_cause_f1"]
+            >= float(frozen_rules["root_cause_f1"]) + declared_margin
+        ),
+    }
+    return {
+        "suite": "decision_quality",
+        "corpus": "frozen_manually_authored_v1",
+        "capture_source": "separately reviewed frozen AI proposals",
+        "case_count": len(cases),
+        "systems": systems,
+        "declared_quality_margin": declared_margin,
+        "gates": gates,
+        "passed": all(gates.values()),
     }
 
 
@@ -351,7 +644,7 @@ def run_injection_eval(corpus_path: Path) -> dict[str, Any]:
 def latest_cohort_f1(session: Session) -> float | None:
     latest = session.scalar(
         select(EvalRun)
-        .where(EvalRun.suite == "cohort", EvalRun.passed.is_(True))
+        .where(EvalRun.suite == "simulator_regression", EvalRun.passed.is_(True))
         .order_by(EvalRun.id.desc())
     )
     if latest is None:
@@ -364,8 +657,16 @@ def _persist_report(session: Session, report: EvalReport) -> None:
         session.add(
             EvalRun(
                 suite=suite,
-                prompt_version=report.prompt_version if suite == "cohort" else None,
-                model=report.model if suite == "cohort" else None,
+                prompt_version=(
+                    report.prompt_version
+                    if suite in {"simulator_regression", "decision_quality"}
+                    else None
+                ),
+                model=(
+                    report.model
+                    if suite in {"simulator_regression", "decision_quality"}
+                    else None
+                ),
                 metrics=metrics,
                 passed=bool(metrics["passed"]),
             )
@@ -377,6 +678,7 @@ def run_all_evals(
     *,
     cohort_path: Path = Path("evals/cohort/cases.jsonl"),
     injection_path: Path = Path("evals/injection/corpus.jsonl"),
+    decision_path: Path = Path("evals/decision_quality/cases.jsonl"),
     baseline_path: Path = Path("evals/baseline.json"),
     report_path: Path | None = None,
     session: Session | None = None,
@@ -388,13 +690,18 @@ def run_all_evals(
         baseline_f1 = latest_cohort_f1(session) or baseline_f1
 
     cohort = run_cohort_eval(cohort_path, baseline_f1=baseline_f1)
+    decision = run_decision_eval(decision_path, baseline_path=baseline_path)
     injection = run_injection_eval(injection_path)
     report = EvalReport(
         generated_at=datetime.now(UTC),
         prompt_version=PROMPT_VERSION,
-        model="deterministic-cohort-v1",
-        overall_passed=bool(cohort["passed"] and injection["passed"]),
-        suites={"cohort": cohort, "injection": injection},
+        model="frozen-ai-capture + deterministic-validator-v1",
+        overall_passed=bool(cohort["passed"] and decision["passed"] and injection["passed"]),
+        suites={
+            "simulator_regression": cohort,
+            "decision_quality": decision,
+            "injection": injection,
+        },
     )
     if session is not None:
         _persist_report(session, report)

@@ -5,6 +5,7 @@ from leakproof.evals.runner import (
     EvalReport,
     run_all_evals,
     run_cohort_eval,
+    run_decision_eval,
     run_injection_eval,
 )
 
@@ -13,5 +14,6 @@ __all__ = [
     "EvalReport",
     "run_all_evals",
     "run_cohort_eval",
+    "run_decision_eval",
     "run_injection_eval",
 ]

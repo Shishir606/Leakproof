@@ -15,3 +15,18 @@ holdout:
   amount_bands_paise:
     low_max: 100000
     medium_max: 1000000
+
+economics:
+  # Contribution margin is applied only to incremental revenue, never gross recovery.
+  contribution_margin_rate: 0.68
+  human_review_unit_cost_paise: 3500
+  included_optional_costs_paise_per_case: {}
+  excluded_costs:
+    - payment gateway fees already embedded in contribution margin
+    - fixed engineering and platform payroll
+    - merchant acquisition and account-management costs
+    - taxes and financing costs
+
+uncertainty:
+  confidence_level: 0.80
+  interval_method: empirical_percentile_across_seeds

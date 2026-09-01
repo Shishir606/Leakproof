@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from collections import defaultdict
 from datetime import UTC, datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
@@ -23,7 +25,7 @@ from leakproof.provenance import DataProvenance
 
 
 class ArmMetrics(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     eligible_cases: int
     recovered_cases: int
@@ -32,8 +34,41 @@ class ArmMetrics(BaseModel):
     recovery_rate: float
 
 
+class EconomicAssumptions(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    contribution_margin_rate: float = Field(ge=0, le=1)
+    human_review_unit_cost_paise: int = Field(ge=0)
+    included_optional_costs_paise_per_case: dict[str, int]
+    excluded_costs: list[str] = Field(min_length=1)
+    holdout_fraction: float = Field(ge=0, le=1)
+    attribution_windows_days: dict[str, int]
+    intervention_effects: dict[str, object]
+
+
+class EstimateInterval(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    median: float
+    minimum: float
+    maximum: float
+    interval_low: float
+    interval_high: float
+
+
+class ScoreboardUncertainty(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    confidence_level: float = Field(gt=0, lt=1)
+    method: str
+    lift_percentage_points: EstimateInterval
+    incremental_revenue_paise: EstimateInterval
+    contribution_margin_paise: EstimateInterval
+    net_economic_value_paise: EstimateInterval
+
+
 class Scoreboard(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     run_id: str
     data_provenance: DataProvenance
@@ -52,8 +87,13 @@ class Scoreboard(BaseModel):
     organic_holdout_paise: int
     counterfactual_organic_paise: int
     incremental_recovered_paise: int
+    incremental_revenue_paise: int
+    contribution_margin_paise: int
     intervention_cost_paise: int
     llm_cost_paise: int
+    human_review_cost_paise: int
+    included_optional_cost_paise: int
+    net_economic_value_paise: int
     net_value_created_paise: int
     contacts: int
     contacts_per_1000_rupees_recovered: float
@@ -64,6 +104,20 @@ class Scoreboard(BaseModel):
     escalated_to_human: int
     unresolved_exceptions: int
     estimator: str = "stratified_holdout_amount_rate"
+    assumption_hash: str
+    seed_count: int = Field(ge=1)
+    assumptions: EconomicAssumptions
+    uncertainty: ScoreboardUncertainty
+
+
+def _point_interval(value: float) -> EstimateInterval:
+    return EstimateInterval(
+        median=value,
+        minimum=value,
+        maximum=value,
+        interval_low=value,
+        interval_high=value,
+    )
 
 
 def _aware(value: datetime) -> datetime:
@@ -189,9 +243,67 @@ def compute_scoreboard(session: Session, run_id: str) -> Scoreboard:
     gross = treatment.recovered_paise
     counterfactual = _counterfactual_organic(treatment_cases, holdout_cases, attributions)
     incremental = gross - counterfactual
-    total_cost = action_cost + llm_cost
     merchant = session.get(Merchant, run.merchant_id)
     synthetic = bool(merchant and (merchant.policy or {}).get("synthetic", False))
+    measurement_snapshot = dict(run.measurement_config or {})
+    economics = dict(measurement_snapshot.get("economics") or {})
+    attribution = dict(measurement_snapshot.get("attribution") or {})
+    uncertainty_config = dict(measurement_snapshot.get("uncertainty") or {})
+    if not economics or not attribution or not uncertainty_config:
+        raise ValueError(f"batch run {run_id} is missing measurement assumptions")
+    contribution_margin_rate = float(economics["contribution_margin_rate"])
+    contribution_margin = round(incremental * contribution_margin_rate)
+    human_review_unit_cost = int(economics["human_review_unit_cost_paise"])
+    human_review_count = sum(
+        any(event.kind == "ESCALATED" for event in events_by_case[case.id])
+        for case in cases
+    )
+    human_review_cost = human_review_count * human_review_unit_cost
+    optional_unit_costs = {
+        str(name): int(value)
+        for name, value in dict(
+            economics.get("included_optional_costs_paise_per_case") or {}
+        ).items()
+    }
+    included_optional_cost = len(cases) * sum(optional_unit_costs.values())
+    net_economic_value = (
+        contribution_margin
+        - action_cost
+        - llm_cost
+        - human_review_cost
+        - included_optional_cost
+    )
+    assumptions = EconomicAssumptions(
+        contribution_margin_rate=contribution_margin_rate,
+        human_review_unit_cost_paise=human_review_unit_cost,
+        included_optional_costs_paise_per_case=optional_unit_costs,
+        excluded_costs=list(economics["excluded_costs"]),
+        holdout_fraction=float(run.holdout_fraction),
+        attribution_windows_days={
+            str(key): int(value)
+            for key, value in dict(attribution.get("windows_days") or {}).items()
+        },
+        intervention_effects=dict(
+            (merchant.policy or {}).get("simulation_treatment_effects") or {}
+        ) if merchant else {},
+    )
+    assumption_hash = hashlib.sha256(
+        json.dumps(
+            assumptions.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    confidence_level = float(uncertainty_config["confidence_level"])
+    lift = round((treatment.recovery_rate - holdout.recovery_rate) * 100, 3)
+    point_uncertainty = ScoreboardUncertainty(
+        confidence_level=confidence_level,
+        method="single_seed_point_estimate; run scripts/run_sensitivity.py for empirical interval",
+        lift_percentage_points=_point_interval(lift),
+        incremental_revenue_paise=_point_interval(incremental),
+        contribution_margin_paise=_point_interval(contribution_margin),
+        net_economic_value_paise=_point_interval(net_economic_value),
+    )
     return Scoreboard(
         run_id=run.id,
         data_provenance=(
@@ -216,16 +328,20 @@ def compute_scoreboard(session: Session, run_id: str) -> Scoreboard:
         throughput_cases_per_minute=round(len(cases) * 60 / duration_seconds, 3),
         treatment=treatment,
         holdout=holdout,
-        lift_percentage_points=round(
-            (treatment.recovery_rate - holdout.recovery_rate) * 100, 3
-        ),
+        lift_percentage_points=lift,
         gross_recovered_paise=gross,
         organic_holdout_paise=holdout.recovered_paise,
         counterfactual_organic_paise=counterfactual,
         incremental_recovered_paise=incremental,
+        incremental_revenue_paise=incremental,
+        contribution_margin_paise=contribution_margin,
         intervention_cost_paise=action_cost,
         llm_cost_paise=llm_cost,
-        net_value_created_paise=incremental - total_cost,
+        human_review_cost_paise=human_review_cost,
+        included_optional_cost_paise=included_optional_cost,
+        net_economic_value_paise=net_economic_value,
+        # Retained for API compatibility. UI and documentation use the precise economic name.
+        net_value_created_paise=net_economic_value,
         contacts=len(contacts),
         contacts_per_1000_rupees_recovered=(
             round(len(contacts) * 100_000 / gross, 4) if gross else 0.0
@@ -247,14 +363,15 @@ def compute_scoreboard(session: Session, run_id: str) -> Scoreboard:
             )
             for case in cases
         ),
-        escalated_to_human=sum(
-            any(event.kind == "ESCALATED" for event in events_by_case[case.id])
-            for case in cases
-        ),
+        escalated_to_human=human_review_count,
         unresolved_exceptions=sum(
             case.outcome is None
             and case.state
             not in {CaseState.CLOSED.value, CaseState.SUPPRESSED.value, CaseState.STOPPED.value}
             for case in cases
         ),
+        assumption_hash=assumption_hash,
+        seed_count=1,
+        assumptions=assumptions,
+        uncertainty=point_uncertainty,
     )

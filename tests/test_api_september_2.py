@@ -174,7 +174,7 @@ def test_allowlisted_delivery_is_delayed_and_idempotent(session_factory):
     provider = FakeEmailProvider()
     with session_factory() as session:
         _, case, action = create_case(session, config)
-        assert action.scheduled_for == NOW + timedelta(seconds=30)
+        assert action.scheduled_for == NOW + timedelta(seconds=7)
         assert execute_demo_recovery_email(
             session, action.id, provider=provider, settings=config, now=NOW
         ).status == "not_due"

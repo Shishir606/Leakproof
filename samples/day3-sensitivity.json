@@ -1,0 +1,139 @@
+{
+  "interval_method": "empirical_percentile_across_seeds",
+  "isolated_evaluation_database": true,
+  "scenarios": [
+    {
+      "assumption_hashes": [
+        "ab986335377de7fecf3fa4f10a656410d2f48dc546e6cd6d6fbca8285523a704"
+      ],
+      "confidence_level": 0.8,
+      "contribution_margin_paise": {
+        "interval_high": 512376610.2,
+        "interval_low": -872174482.8,
+        "maximum": 930044179.0,
+        "median": -170598101.0,
+        "minimum": -894056316.0
+      },
+      "estimator": "stratified_holdout_amount_rate",
+      "incremental_revenue_paise": {
+        "interval_high": 753495015.2,
+        "interval_low": -1282609533.6,
+        "maximum": 1367712028.0,
+        "median": -250879561.0,
+        "minimum": -1314788700.0
+      },
+      "lift_percentage_points": {
+        "interval_high": 4.147,
+        "interval_low": -4.096,
+        "maximum": 4.593,
+        "median": 3.035,
+        "minimum": -4.974
+      },
+      "net_economic_value_paise": {
+        "interval_high": 511936445.2,
+        "interval_low": -872601967.8,
+        "maximum": 929599786.0,
+        "median": -171028414.0,
+        "minimum": -894472589.0
+      },
+      "seed_count": 5,
+      "seeds": [
+        41,
+        42,
+        43,
+        44,
+        45
+      ],
+      "treatment_effect_multiplier": 0.25
+    },
+    {
+      "assumption_hashes": [
+        "9db619667117cbaa1646584318b50a68038342bfe5542575b8a1fa6aa7ec7eaf"
+      ],
+      "confidence_level": 0.8,
+      "contribution_margin_paise": {
+        "interval_high": 513465534.2,
+        "interval_low": -871286204.4,
+        "maximum": 931393933.0,
+        "median": -169793476.0,
+        "minimum": -893192244.0
+      },
+      "estimator": "stratified_holdout_amount_rate",
+      "incremental_revenue_paise": {
+        "interval_high": 755096374.2,
+        "interval_low": -1281303242.0,
+        "maximum": 1369696961.0,
+        "median": -249696288.0,
+        "minimum": -1313518006.0
+      },
+      "lift_percentage_points": {
+        "interval_high": 5.85,
+        "interval_low": -2.847,
+        "maximum": 6.286,
+        "median": 4.999,
+        "minimum": -3.55
+      },
+      "net_economic_value_paise": {
+        "interval_high": 513025513.2,
+        "interval_low": -871714937.4,
+        "maximum": 930949680.0,
+        "median": -170223649.0,
+        "minimum": -893608337.0
+      },
+      "seed_count": 5,
+      "seeds": [
+        41,
+        42,
+        43,
+        44,
+        45
+      ],
+      "treatment_effect_multiplier": 1.0
+    },
+    {
+      "assumption_hashes": [
+        "1bab7365758e57e55ee97f8d095913b8d28b992d5c70d6b908dc9bbb1ebfc9ad"
+      ],
+      "confidence_level": 0.8,
+      "contribution_margin_paise": {
+        "interval_high": 513681791.8,
+        "interval_low": -871004991.0,
+        "maximum": 931407465.0,
+        "median": -169718657.0,
+        "minimum": -892838715.0
+      },
+      "estimator": "stratified_holdout_amount_rate",
+      "incremental_revenue_paise": {
+        "interval_high": 755414400.2,
+        "interval_low": -1280889693.0,
+        "maximum": 1369716861.0,
+        "median": -249586261.0,
+        "minimum": -1312998111.0
+      },
+      "lift_percentage_points": {
+        "interval_high": 6.646,
+        "interval_low": -2.394,
+        "maximum": 7.132,
+        "median": 5.137,
+        "minimum": -3.265
+      },
+      "net_economic_value_paise": {
+        "interval_high": 513239716.8,
+        "interval_low": -871433674.0,
+        "maximum": 930959742.0,
+        "median": -170148810.0,
+        "minimum": -893254758.0
+      },
+      "seed_count": 5,
+      "seeds": [
+        41,
+        42,
+        43,
+        44,
+        45
+      ],
+      "treatment_effect_multiplier": 1.25
+    }
+  ],
+  "synthetic": true
+}

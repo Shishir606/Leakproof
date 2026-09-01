@@ -8,11 +8,17 @@ from pydantic import ValidationError
 from sqlalchemy import func, select
 
 from leakproof.diagnosis.tier2 import CohortScanInput
-from leakproof.evals import run_all_evals, run_cohort_eval, run_injection_eval
+from leakproof.evals import (
+    run_all_evals,
+    run_cohort_eval,
+    run_decision_eval,
+    run_injection_eval,
+)
 from leakproof.models.db import EvalRun
 
 COHORT = Path("evals/cohort/cases.jsonl")
 INJECTION = Path("evals/injection/corpus.jsonl")
+DECISIONS = Path("evals/decision_quality/cases.jsonl")
 
 
 def test_cohort_contract_rejects_undeclared_identifier_fields():
@@ -84,20 +90,42 @@ def test_injection_suite_has_zero_bypasses_and_preserves_benign_inputs():
     assert result["attack_success_summary"] == "0/56"
 
 
+def test_manual_decision_eval_shows_ai_value_only_after_deterministic_validation():
+    result = run_decision_eval(DECISIONS)
+
+    assert result["passed"] is True
+    assert result["corpus"] == "frozen_manually_authored_v1"
+    rules = result["systems"]["rules_only"]
+    raw = result["systems"]["raw_ai"]
+    validated = result["systems"]["ai_plus_validator"]
+    assert validated["root_cause_f1"] > rules["root_cause_f1"]
+    assert validated["scope_precision"] > rules["scope_precision"]
+    assert raw["false_suppression_rate"] > 0
+    assert raw["unsupported_evidence_acceptance"] > 0
+    assert validated["false_suppression_rate"] == 0
+    assert validated["unsupported_evidence_acceptance"] == 0
+    assert validated["invalid_action_execution"] == 0
+    assert validated["safe_fallback_rate"] == 1
+
+
 def test_full_eval_persists_both_suites_and_latest_api_reports_them(
     session_factory, client, tmp_path
 ):
     with session_factory() as session:
         report = run_all_evals(report_path=tmp_path / "report.json", session=session)
         assert report.overall_passed is True
-        assert session.scalar(select(func.count()).select_from(EvalRun)) == 2
+        assert session.scalar(select(func.count()).select_from(EvalRun)) == 3
 
     response = client.get("/evals/latest")
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["overall_passed"] is True
-    assert {item["suite"] for item in payload["runs"]} == {"cohort", "injection"}
+    assert {item["suite"] for item in payload["runs"]} == {
+        "decision_quality",
+        "injection",
+        "simulator_regression",
+    }
 
 
 def test_latest_evals_returns_not_found_before_first_run(client):

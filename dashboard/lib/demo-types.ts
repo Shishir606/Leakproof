@@ -82,12 +82,22 @@ export type DemoSessionProjection = {
   email_mode: "allowlisted" | "preview_only";
   case: DemoCaseProjection | null;
   recovery_url_available: boolean;
+  recovery_path: string | null;
   gate_verdict: string | null;
   recovery_actions: RecoveryAction[];
   provider_statuses: ProviderStatus[];
   timeline: TimelineItem[];
   end_to_end_latency_seconds: number | null;
   metrics: {
+    cases_detected: number;
+    recovered_cases: number;
+    recovered_amount_paise: number;
+    recovery_rate: number;
+    median_recovery_time_seconds: number | null;
+    provider_failures: number;
+    luna_cost_paise: number;
+  };
+  environment_metrics: {
     cases_detected: number;
     recovered_cases: number;
     recovered_amount_paise: number;

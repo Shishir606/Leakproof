@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { DemoApiError, getSessionProjection } from "@/lib/demo-api";
+import { createSession, DemoApiError, getSessionProjection } from "@/lib/demo-api";
 import type {
   DemoSession,
   DemoSessionProjection,
@@ -82,6 +82,7 @@ export function LiveDemoDashboard() {
   const [projection, setProjection] = useState<DemoSessionProjection | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [startingNew, setStartingNew] = useState(false);
 
   useEffect(() => {
     try {
@@ -168,6 +169,32 @@ export function LiveDemoDashboard() {
     .find((event) =>
       ["POLICY_VALIDATED", "AI_PROPOSAL_REJECTED", "AI_DEGRADED"].includes(event.kind),
     );
+  const checkoutOpened = projection.timeline.some((event) => event.kind === "checkout_opened");
+  const stages = [
+    { label: "Order created", complete: true },
+    { label: "Checkout opened", complete: checkoutOpened },
+    { label: "Risk detected", complete: Boolean(currentCase) },
+    { label: "Diagnosed", complete: Boolean(diagnosis) },
+    { label: "Recovery ready", complete: projection.recovery_actions.length > 0 },
+    { label: "Payment verified", complete: projection.state === "RECOVERED" },
+  ];
+  const firstIncomplete = stages.findIndex((stage) => !stage.complete);
+
+  const startNewDemo = async () => {
+    if (startingNew) return;
+    setStartingNew(true);
+    sessionStorage.removeItem(SESSION_STORAGE_KEY);
+    try {
+      const next = await createSession();
+      sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(next));
+      window.location.assign("/demo");
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : "A new demo session could not be created.",
+      );
+      setStartingNew(false);
+    }
+  };
 
   return (
     <div className="live-dashboard">
@@ -184,8 +211,24 @@ export function LiveDemoDashboard() {
           </span>
           <small>Session …{projection.session_id.slice(-10)}</small>
           <Link href="/demo">Open Checkout</Link>
+          <button type="button" onClick={startNewDemo} disabled={startingNew}>
+            {startingNew ? "Creating…" : "Start a new demo"}
+          </button>
         </div>
       </header>
+
+      <ol className="session-progress" aria-label="Recovery progress">
+        {stages.map((stage, index) => (
+          <li
+            key={stage.label}
+            className={stage.complete ? "complete" : index === firstIncomplete ? "current" : "pending"}
+            aria-current={index === firstIncomplete ? "step" : undefined}
+          >
+            <span>{stage.complete ? "✓" : index + 1}</span>
+            <strong>{stage.label}</strong>
+          </li>
+        ))}
+      </ol>
 
       <section className="source-legend" aria-label="Live data sources">
         {(["browser", "razorpay", "openai", "resend"] as const).map((source) => (
@@ -196,13 +239,24 @@ export function LiveDemoDashboard() {
         <small>Polling every 2 seconds while active</small>
       </section>
 
-      <section className="live-metrics" aria-label="Live operational metrics">
-        <div><span>Cases detected</span><strong>{projection.metrics.cases_detected}</strong><small>live sessions only</small></div>
-        <div><span>Recovered</span><strong>{projection.metrics.recovered_cases}</strong><small>{percent(projection.metrics.recovery_rate)} recovery rate</small></div>
-        <div><span>Amount recovered</span><strong>{money(projection.metrics.recovered_amount_paise)}</strong><small>verified provider truth</small></div>
-        <div><span>Median recovery</span><strong>{elapsed(projection.metrics.median_recovery_time_seconds)}</strong><small>{projection.metrics.provider_failures} provider failures</small></div>
-        <div><span>Luna cost</span><strong>{money(projection.metrics.luna_cost_paise)}</strong><small>recorded API cost</small></div>
+      <div className="session-metrics-heading"><p className="eyebrow">This session</p><span>Global history cannot change these values</span></div>
+      <section className="live-metrics session-only" aria-label="This session metrics">
+        <div><span>Detected amount</span><strong>{money(projection.amount_paise)}</strong><small>server-fixed order</small></div>
+        <div><span>Recovered amount</span><strong>{money(projection.metrics.recovered_amount_paise)}</strong><small>verified provider truth</small></div>
+        <div><span>State</span><strong>{label(projection.state)}</strong><small>current session only</small></div>
+        <div><span>Recovery latency</span><strong>{elapsed(projection.metrics.median_recovery_time_seconds)}</strong><small>detection to verified payment</small></div>
+        <div><span>Provider failures</span><strong>{projection.metrics.provider_failures}</strong><small>this order and case</small></div>
+        <div><span>AI cost</span><strong>{money(projection.metrics.luna_cost_paise)}</strong><small>this case only</small></div>
       </section>
+      <details className="environment-metrics">
+        <summary>Aggregate demo environment metrics</summary>
+        <div>
+          <span>{projection.environment_metrics.cases_detected} cases</span>
+          <span>{projection.environment_metrics.recovered_cases} recovered</span>
+          <span>{money(projection.environment_metrics.recovered_amount_paise)} verified</span>
+          <span>{percent(projection.environment_metrics.recovery_rate)} recovery rate</span>
+        </div>
+      </details>
 
       <section className="live-main-grid">
         <article className="live-case-card">
@@ -246,6 +300,12 @@ export function LiveDemoDashboard() {
         <article className="live-actions-card">
           <div className="live-panel-heading"><div><p className="eyebrow">Bounded ladder</p><h2>Recovery actions</h2></div><span>{projection.email_mode.replaceAll("_", " ")}</span></div>
           {projection.recovery_actions.length ? (
+            <>
+            {projection.recovery_url_available && (
+              <p className="recovery-recheck-copy">
+                Before Checkout reopens, the server verifies that the original order is still unpaid.
+              </p>
+            )}
             <div className="live-action-list">
               {projection.recovery_actions.map((action, index) => (
                 <div className="live-action" key={action.action_id ?? action.action_type}>
@@ -253,9 +313,15 @@ export function LiveDemoDashboard() {
                   <div><strong>{label(action.action_type)}</strong><small>{action.action_type === "recovery_link" ? "Customer-authorized original order" : `Due ${time(action.scheduled_for)}`}</small></div>
                   <span className={`action-status status-${action.status}`}>{label(action.status)}</span>
                   <div className="live-action-receipt"><span>Gate</span><strong>{action.gate_verdict ? label(action.gate_verdict) : "Pending"}</strong><small>{action.provider_receipt_id ? `Receipt …${action.provider_receipt_id.slice(-10)}` : "No provider receipt"}</small></div>
+                  {action.action_type === "recovery_link" && projection.recovery_path && (
+                    <Link className="continue-recovery" href={projection.recovery_path}>
+                      Continue recovery <span>→</span>
+                    </Link>
+                  )}
                 </div>
               ))}
             </div>
+            </>
           ) : <p className="live-placeholder">The in-app recovery link appears as soon as a verified case is detected.</p>}
         </article>
       </section>

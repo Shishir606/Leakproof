@@ -1,4 +1,4 @@
-.PHONY: install lint test test-coverage dashboard-check eval-gates security-tests acceptance-tests release-gate test-august-27 test-august-28 test-august-29 test-api-august-29 test-api-august-30 test-api-august-31 test-api-september-1 test-api-september-2 test-api-september-3 test-api-september-4 test-august-30 test-august-31 test-september-1 test-september-2 test-september-3 test-september-4 evals dashboard batch build up down migrate demo-webhook verify-foundation seed tunnel
+.PHONY: install lint test test-coverage dashboard-check eval-gates security-tests acceptance-tests release-gate test-august-27 test-august-28 test-august-29 test-api-august-29 test-api-august-30 test-api-august-31 test-api-september-1 test-api-september-2 test-api-september-3 test-api-september-4 test-august-30 test-august-31 test-september-1 test-september-2 test-september-3 test-september-4 evals sensitivity dashboard batch build up down migrate demo-webhook verify-foundation seed tunnel
 
 install:
 	uv sync --extra dev
@@ -92,6 +92,9 @@ test-september-4:
 
 evals:
 	LEAKPROOF_DATABASE_URL=postgresql+psycopg://leakproof:leakproof@localhost:55432/leakproof uv run python scripts/run_evals.py
+
+sensitivity:
+	uv run python scripts/run_sensitivity.py
 
 dashboard:
 	npm --prefix dashboard run dev

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+from pydantic import ValidationError
 from sqlalchemy import func, select
 
 from leakproof.config import get_measurement_config
 from leakproof.diagnosis import diagnose_case
-from leakproof.measurement import compute_scoreboard
+from leakproof.measurement import Scoreboard, compute_scoreboard
 from leakproof.models.db import (
     Action,
     BatchRun,
@@ -284,13 +286,45 @@ def test_scoreboard_computes_lift_incremental_recovery_cost_and_api(
     assert scoreboard.counterfactual_organic_paise == 200_000
     assert scoreboard.incremental_recovered_paise == 100_000
     assert scoreboard.intervention_cost_paise == 50
-    assert scoreboard.net_value_created_paise == 99_950
+    assert scoreboard.incremental_revenue_paise == 100_000
+    assert scoreboard.contribution_margin_paise == 68_000
+    assert scoreboard.net_economic_value_paise == 67_950
+    assert scoreboard.net_value_created_paise == 67_950
+    assert scoreboard.seed_count == 1
+    assert len(scoreboard.assumption_hash) == 64
+    assert scoreboard.assumptions.contribution_margin_rate == 0.68
+    assert scoreboard.uncertainty.method.startswith("single_seed_point_estimate")
     assert scoreboard.false_chase_count == 0
 
     response = client.get(f"/scoreboard/{run_id}")
     assert response.status_code == 200
     assert response.json()["lift_percentage_points"] == 25.0
     assert response.json()["estimator"] == "stratified_holdout_amount_rate"
+
+    strict_payload = scoreboard.model_dump(mode="json")
+    strict_payload.pop("assumptions")
+    with pytest.raises(ValidationError):
+        Scoreboard.model_validate(strict_payload)
+    missing_provenance = scoreboard.model_dump(mode="json")
+    missing_provenance.pop("data_provenance")
+    with pytest.raises(ValidationError):
+        Scoreboard.model_validate(missing_provenance)
+
+    with session_factory() as session:
+        run = session.get(BatchRun, run_id)
+        changed = dict(run.measurement_config)
+        changed["economics"] = {
+            **changed["economics"],
+            "contribution_margin_rate": 0.50,
+        }
+        run.measurement_config = changed
+        session.commit()
+        lower_margin = compute_scoreboard(session, run_id)
+
+    assert lower_margin.gross_recovered_paise == scoreboard.gross_recovered_paise
+    assert lower_margin.incremental_revenue_paise == scoreboard.incremental_revenue_paise
+    assert lower_margin.contribution_margin_paise == 50_000
+    assert lower_margin.net_economic_value_paise == 49_950
 
 
 def test_scoreboard_returns_not_found_for_unknown_run(client):

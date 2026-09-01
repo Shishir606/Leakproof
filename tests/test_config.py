@@ -34,6 +34,10 @@ def test_all_foundation_configuration_is_typed_and_loads():
     assert measurement.holdout.stratify_by == ["leak_type", "amount_band"]
     assert measurement.attribution.windows_days["PAYMENT_FAILURE"] == 7
     assert measurement.attribution.windows_days["INVOICE_OVERDUE"] == 21
+    assert measurement.economics.contribution_margin_rate == 0.68
+    assert measurement.economics.human_review_unit_cost_paise == 3500
+    assert measurement.economics.excluded_costs
+    assert measurement.uncertainty.confidence_level == 0.80
 
 
 def test_simulation_remains_the_safe_default():

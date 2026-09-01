@@ -28,10 +28,18 @@ export default async function ScenarioLabPage() {
     return <Shell active="scenario"><EmptyState title="No synthetic scoreboard yet" detail={detail} /></Shell>;
   }
   const evaluations = await getLatestEvals().catch(() => null);
+  const decisionEvaluation = evaluations?.runs.find((run) => run.suite === "decision_quality");
   const exceptions = await getExceptionReport(scoreboard.run_id).catch(() => null);
   const leakEntries = Object.entries(scoreboard.cases_by_leak_type).sort((a, b) => b[1] - a[1]);
   const largestLeak = Math.max(...leakEntries.map(([, count]) => count), 1);
-  const costs = scoreboard.intervention_cost_paise + scoreboard.llm_cost_paise;
+  const costs = scoreboard.intervention_cost_paise + scoreboard.llm_cost_paise + scoreboard.human_review_cost_paise + scoreboard.included_optional_cost_paise;
+  const interventionEffects = Object.entries(scoreboard.assumptions.intervention_effects)
+    .filter(([, value]) => typeof value === "object" && value !== null)
+    .flatMap(([action, value]) =>
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, rate]) => typeof rate === "number")
+        .map(([failureClass, rate]) => `${label(action)} / ${label(failureClass)}: ${percent(Number(rate))}`),
+    );
 
   return (
     <Shell active="scenario">
@@ -55,18 +63,18 @@ export default async function ScenarioLabPage() {
 
         <section className="hero-grid">
           <article className="net-value-card">
-            <div className="card-label"><CoinsIcon /> Simulated net value estimate</div>
-            <div className="hero-value">{money(scoreboard.net_value_created_paise)}</div>
-            <p>Incremental recovery after every intervention and model cost.</p>
+            <div className="card-label"><CoinsIcon /> Simulated net economic-value estimate</div>
+            <div className="hero-value">{money(scoreboard.net_economic_value_paise)}</div>
+            <p>Contribution margin on incremental revenue, after declared intervention, model, review, and included optional costs.</p>
             <div className="value-waterfall">
-              <div><span>Incremental</span><strong>+{money(scoreboard.incremental_recovered_paise)}</strong></div>
+              <div><span>Contribution</span><strong>{scoreboard.contribution_margin_paise >= 0 ? "+" : ""}{money(scoreboard.contribution_margin_paise)}</strong></div>
               <i />
               <div><span>Total cost</span><strong>−{money(costs)}</strong></div>
             </div>
           </article>
           <article className="lift-card">
-            <div className="card-label"><PulseIcon /> Simulated recovery lift estimate</div>
-            <div className="lift-value">+{scoreboard.lift_percentage_points.toFixed(1)}<span>pp</span></div>
+            <div className="card-label"><PulseIcon /> Simulated treatment-vs-holdout lift estimate</div>
+            <div className="lift-value">{scoreboard.lift_percentage_points >= 0 ? "+" : ""}{scoreboard.lift_percentage_points.toFixed(1)}<span>pp</span></div>
             <div className="arm-row">
               <span>Treatment</span>
               <div className="bar-track"><i className="bar treatment" style={{ width: `${Math.max(scoreboard.treatment.recovery_rate * 100, 2)}%` }} /></div>
@@ -77,9 +85,24 @@ export default async function ScenarioLabPage() {
               <div className="bar-track"><i className="bar holdout" style={{ width: `${Math.max(scoreboard.holdout.recovery_rate * 100, 2)}%` }} /></div>
               <strong>{percent(scoreboard.holdout.recovery_rate)}</strong>
             </div>
-            <small>{scoreboard.estimator.replaceAll("_", " ")}</small>
+            <small>{scoreboard.estimator.replaceAll("_", " ")} · {scoreboard.seed_count} seed · {Math.round(scoreboard.uncertainty.confidence_level * 100)}% uncertainty declaration</small>
           </article>
         </section>
+
+        <details className="assumptions-panel">
+          <summary>Assumptions, uncertainty, and excluded costs</summary>
+          <div className="assumptions-grid">
+            <div><span>Contribution margin</span><strong>{percent(scoreboard.assumptions.contribution_margin_rate)}</strong><small>Applied to incremental revenue only</small></div>
+            <div><span>Holdout fraction</span><strong>{percent(scoreboard.assumptions.holdout_fraction)}</strong><small>Stratified treatment comparison</small></div>
+            <div><span>Attribution windows</span><strong>{Object.values(scoreboard.assumptions.attribution_windows_days).join(" / ")} days</strong><small>{Object.keys(scoreboard.assumptions.attribution_windows_days).map(label).join(", ")}</small></div>
+            <div><span>Human review</span><strong>{money(scoreboard.assumptions.human_review_unit_cost_paise)}</strong><small>Declared unit cost per escalation</small></div>
+          </div>
+          <div className="assumption-lists">
+            <div><h3>Intervention effects</h3><ul>{interventionEffects.length ? interventionEffects.map((effect) => <li key={effect}>{effect}</li>) : <li>No intervention-effect snapshot was attached to this historical run.</li>}</ul></div>
+            <div><h3>Excluded costs</h3><ul>{scoreboard.assumptions.excluded_costs.map((cost) => <li key={cost}>{cost}</li>)}</ul></div>
+          </div>
+          <p>Point run: lift {scoreboard.uncertainty.lift_percentage_points.interval_low.toFixed(1)}–{scoreboard.uncertainty.lift_percentage_points.interval_high.toFixed(1)} pp. Run the isolated multi-seed sensitivity command for an empirical interval. Assumption hash <code>{scoreboard.assumption_hash.slice(0, 12)}</code>.</p>
+        </details>
 
         <section className="metric-strip" aria-label="Recovery metrics">
           <div><span>Simulated gross recovery</span><strong>{money(scoreboard.gross_recovered_paise)}</strong><small>{scoreboard.treatment.recovered_cases} treated recoveries</small></div>
@@ -145,8 +168,8 @@ export default async function ScenarioLabPage() {
           <article className="eval-card">
             <div>
               <span className={evaluations?.overall_passed ? "status-pass" : "status-muted"}>{evaluations?.overall_passed ? "All gates passed" : "No retained evaluation"}</span>
-              <h2>Adversarial checks stay in the loop.</h2>
-              <p>{evaluations ? `${evaluations.runs.length} suites checked against the latest committed corpora.` : "Run make evals to attach the latest quality report."}</p>
+              <h2>AI value is measured against frozen rules.</h2>
+              <p>{decisionEvaluation ? "Rules-only, raw AI, and AI plus deterministic validation were scored on a separately authored decision set." : evaluations ? `${evaluations.runs.length} suites checked; the frozen decision-quality result is missing.` : "Run make evals to attach the latest quality report."}</p>
             </div>
             <div className="eval-rings"><span>{evaluations?.runs.filter((run) => run.passed).length ?? 0}<small>passing<br/>suites</small></span></div>
           </article>

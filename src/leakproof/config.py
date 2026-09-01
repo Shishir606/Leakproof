@@ -7,7 +7,7 @@ from typing import Any, Literal
 from urllib.parse import urlsplit
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     demo_session_ttl_minutes: int = Field(default=30, ge=5, le=120)
     demo_sessions_per_ip_hour: int = Field(default=10, ge=1, le=100)
     demo_checkout_events_per_session: int = Field(default=100, ge=4, le=1_000)
-    demo_abandonment_delay_seconds: int = Field(default=30, ge=1, le=300)
+    demo_abandonment_delay_seconds: int = Field(default=7, ge=1, le=300)
     demo_sessions_enabled: bool = True
     luna_enabled: bool = True
     outbound_email_enabled: bool = True
@@ -291,9 +291,30 @@ class HoldoutConfig(BaseModel):
     amount_bands_paise: AmountBandsConfig
 
 
+class EconomicsConfig(BaseModel):
+    contribution_margin_rate: float = Field(ge=0, le=1)
+    human_review_unit_cost_paise: int = Field(ge=0)
+    included_optional_costs_paise_per_case: dict[str, int] = Field(default_factory=dict)
+    excluded_costs: list[str] = Field(min_length=1)
+
+    @field_validator("included_optional_costs_paise_per_case")
+    @classmethod
+    def require_non_negative_optional_costs(cls, value: dict[str, int]) -> dict[str, int]:
+        if any(cost < 0 for cost in value.values()):
+            raise ValueError("included optional costs cannot be negative")
+        return value
+
+
+class UncertaintyConfig(BaseModel):
+    confidence_level: float = Field(gt=0, lt=1)
+    interval_method: Literal["empirical_percentile_across_seeds"]
+
+
 class MeasurementConfig(BaseModel):
     attribution: AttributionConfig
     holdout: HoldoutConfig
+    economics: EconomicsConfig
+    uncertainty: UncertaintyConfig
 
 
 class PolicyConfig(BaseModel):

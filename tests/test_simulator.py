@@ -40,8 +40,8 @@ def test_fixed_seed_generates_identical_artifacts_and_another_seed_changes_them(
     assert repeated.fingerprint() == dataset.fingerprint()
     assert alternate.fingerprint() != dataset.fingerprint()
     assert alternate.run_id != dataset.run_id
-    assert dataset.simulator_schema_version == 3
-    assert dataset.run_id.startswith("sim_v3_")
+    assert dataset.simulator_schema_version == 4
+    assert dataset.run_id.startswith("sim_v4_")
     first = dataset.signals[0]
     assert first.assignment_key.startswith("merchant_sim_42_")
     assert "v3" not in first.assignment_key
@@ -49,6 +49,34 @@ def test_fixed_seed_generates_identical_artifacts_and_another_seed_changes_them(
     normalized = first.normalized(dataset.run_id)
     assert normalized.evidence["simulation"]["assignment_key"] == first.assignment_key
     assert normalized.evidence["simulation"]["outcome_key"] == first.outcome_key
+
+
+def test_treatment_sensitivity_keeps_assignment_and_outcome_draws_paired():
+    parameters = load_parameters()
+    pessimistic_effects = parameters.treatment_effect.model_copy(
+        update={
+            "silent_retry": {
+                key: value * 0.25
+                for key, value in parameters.treatment_effect.silent_retry.items()
+            },
+            "whatsapp_link": {
+                key: value * 0.25
+                for key, value in parameters.treatment_effect.whatsapp_link.items()
+            },
+        }
+    )
+    pessimistic = generate_dataset(
+        parameters.model_copy(update={"treatment_effect": pessimistic_effects})
+    )
+    baseline = generate_dataset(parameters)
+
+    assert pessimistic.run_id != baseline.run_id
+    assert [item.assignment_key for item in pessimistic.signals] == [
+        item.assignment_key for item in baseline.signals
+    ]
+    assert [item.outcome_key for item in pessimistic.signals] == [
+        item.outcome_key for item in baseline.signals
+    ]
 
 
 def test_seed_generates_5000_customers_and_twelve_months_of_history(dataset):

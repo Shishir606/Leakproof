@@ -1,4 +1,12 @@
 {
+  "decision_quality": {
+    "recorded_before_ai_comparison": true,
+    "required_quality_margin": 0.05,
+    "rules_only": {
+      "root_cause_f1": 0.241546,
+      "scope_precision": 0.0
+    }
+  },
   "model": "deterministic-cohort-v1",
   "overall_f1": 1.0,
   "prompt_version": "cohort_scan_v1"
