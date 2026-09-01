@@ -27,6 +27,10 @@ class RecoveryTokenExpired(InvalidRecoveryToken):
     pass
 
 
+class InvalidCheckoutPaymentSignature(ValueError):
+    pass
+
+
 @dataclass(frozen=True)
 class SessionTokenClaims:
     session_id: str
@@ -53,9 +57,7 @@ def _b64encode(value: bytes) -> str:
 
 
 def _b64decode(value: str) -> bytes:
-    decoded = base64.b64decode(
-        value + "=" * (-len(value) % 4), altchars=b"-_", validate=True
-    )
+    decoded = base64.b64decode(value + "=" * (-len(value) % 4), altchars=b"-_", validate=True)
     if _b64encode(decoded) != value:
         raise binascii.Error("non-canonical base64url encoding")
     return decoded
@@ -222,3 +224,21 @@ def decrypt_recipient(ciphertext: str, secret: str) -> str:
         return Fernet(key).decrypt(ciphertext.encode()).decode()
     except InvalidToken as exc:
         raise ValueError("recipient ciphertext is invalid") from exc
+
+
+def verify_checkout_payment_signature(
+    order_id: str,
+    payment_id: str,
+    signature: str,
+    key_secret: str,
+) -> None:
+    """Verify Razorpay Checkout proof using the server-owned order identifier."""
+    if not order_id or not payment_id or not key_secret:
+        raise InvalidCheckoutPaymentSignature("checkout payment signature is invalid")
+    expected = hmac.new(
+        key_secret.encode(),
+        f"{order_id}|{payment_id}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(signature.casefold(), expected):
+        raise InvalidCheckoutPaymentSignature("checkout payment signature is invalid")

@@ -83,11 +83,7 @@ def _safe_event_payload(event: Event) -> dict:
             ],
         }
     if event.kind == "GATE":
-        return {
-            key: payload[key]
-            for key in ("decision", "reason", "retry_at")
-            if key in payload
-        }
+        return {key: payload[key] for key in ("decision", "reason", "retry_at") if key in payload}
     if event.kind == "ACTED":
         return {
             key: payload[key]
@@ -140,6 +136,10 @@ def _source(event: Event) -> str:
         return "browser"
     if evidence_source == "razorpay_webhook":
         return "razorpay"
+    if evidence_source == "razorpay_checkout_signature_and_api":
+        return "razorpay"
+    if evidence_source == "razorpay_payment_api":
+        return "razorpay"
     if event.actor == "luna" or "openai" in event.actor:
         return "openai"
     if "razorpay" in event.actor:
@@ -175,8 +175,7 @@ def get_demo_session_projection(
         .where(
             RecoveryCase.merchant_id == demo.merchant_id,
             or_(
-                RecoveryCase.dedupe_key
-                == live_case_dedupe_key(demo.id, demo.razorpay_order_id),
+                RecoveryCase.dedupe_key == live_case_dedupe_key(demo.id, demo.razorpay_order_id),
                 RecoveryCase.customer_id == demo.customer_id,
             ),
         )
@@ -222,9 +221,7 @@ def get_demo_session_projection(
         if call.provider in {"razorpay", "openai", "resend"}
     ]
     email_delivery = (
-        session.scalar(
-            select(EmailDelivery).where(EmailDelivery.case_id == case.id)
-        )
+        session.scalar(select(EmailDelivery).where(EmailDelivery.case_id == case.id))
         if case
         else None
     )
@@ -281,16 +278,17 @@ def get_demo_session_projection(
         if call.provider in {"razorpay", "openai", "resend"}
     )
     if email_delivery is not None:
-        delivery_events = list(
-            session.scalars(
-                select(EmailDeliveryEvent)
-                .where(
-                    EmailDeliveryEvent.provider_email_id
-                    == email_delivery.provider_email_id
+        delivery_events = (
+            list(
+                session.scalars(
+                    select(EmailDeliveryEvent)
+                    .where(EmailDeliveryEvent.provider_email_id == email_delivery.provider_email_id)
+                    .order_by(EmailDeliveryEvent.occurred_at, EmailDeliveryEvent.id)
                 )
-                .order_by(EmailDeliveryEvent.occurred_at, EmailDeliveryEvent.id)
             )
-        ) if email_delivery.provider_email_id else []
+            if email_delivery.provider_email_id
+            else []
+        )
         if delivery_events:
             timeline.extend(
                 TimelineItem(
@@ -323,11 +321,10 @@ def get_demo_session_projection(
         if case
         else []
     )
-    recovery_url_available = (
-        case is not None
-        and DemoSessionState(demo.state)
-        in {DemoSessionState.AT_RISK, DemoSessionState.CHECKOUT_OPEN}
-    )
+    recovery_url_available = case is not None and DemoSessionState(demo.state) in {
+        DemoSessionState.AT_RISK,
+        DemoSessionState.CHECKOUT_OPEN,
+    }
     recovery_path = None
     if recovery_url_available:
         recovery_token = issue_demo_recovery_token(
@@ -398,9 +395,7 @@ def get_demo_session_projection(
     )
     live_case_ids = [item.id for item in live_cases]
     live_session_ids = list(
-        session.scalars(
-            select(DemoSession.id).where(DemoSession.merchant_id == demo.merchant_id)
-        )
+        session.scalars(select(DemoSession.id).where(DemoSession.merchant_id == demo.merchant_id))
     )
     live_provider_failures = 0
     if live_case_ids or live_session_ids:
@@ -434,9 +429,7 @@ def get_demo_session_projection(
         amount_paise=demo.amount_paise,
         currency=demo.currency,
         expires_at=_utc(demo.expires_at),
-        email_mode=(
-            EmailMode.ALLOWLISTED if demo.recipient_ciphertext else EmailMode.PREVIEW_ONLY
-        ),
+        email_mode=(EmailMode.ALLOWLISTED if demo.recipient_ciphertext else EmailMode.PREVIEW_ONLY),
         case=(
             CaseProjection(
                 case_id=case.id,

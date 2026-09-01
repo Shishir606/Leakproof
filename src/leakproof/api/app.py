@@ -11,6 +11,7 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
+from leakproof.api.access_logging import install_access_log_redaction
 from leakproof.api.auth import OperatorPrincipal, get_operator_principal
 from leakproof.audit.timeline import replay_case
 from leakproof.batch import BatchResult, run_full_batch
@@ -22,6 +23,8 @@ from leakproof.demo import (
     APIErrorDetail,
     CheckoutEventReceipt,
     CheckoutEventRequest,
+    CheckoutPaymentVerificationReceipt,
+    CheckoutPaymentVerificationRequest,
     DemoAcceptanceExport,
     DemoSessionCreated,
     DemoSessionCreateRequest,
@@ -34,6 +37,9 @@ from leakproof.demo.acceptance import build_demo_acceptance_export
 from leakproof.demo.projection import get_demo_session_projection
 from leakproof.demo.rate_limit import RateLimitUnavailable
 from leakproof.demo.service import (
+    CheckoutPaymentNotCaptured,
+    CheckoutPaymentProofInvalid,
+    CheckoutPaymentVerificationUnavailable,
     DemoRateLimitExceeded,
     DemoSessionExpired,
     DemoSessionUnauthorized,
@@ -43,6 +49,7 @@ from leakproof.demo.service import (
     create_demo_session,
     get_recovery_bootstrap,
     ingest_checkout_event,
+    verify_checkout_payment,
 )
 from leakproof.measurement import ExceptionReport, Scoreboard, compute_scoreboard, exception_report
 from leakproof.models.db import (
@@ -75,6 +82,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    install_access_log_redaction()
     get_settings()  # enforce mode-specific startup gates
     get_policy_config()  # fail startup on malformed policy/configuration
     yield
@@ -347,9 +355,16 @@ async def razorpay_webhook(
     x_razorpay_signature: str = Header(default=""),
     x_razorpay_event_id: str | None = Header(default=None),
     x_leakproof_merchant_id: str | None = Header(default=None),
-) -> WebhookAccepted:
+) -> WebhookAccepted | JSONResponse:
     body = await request.body()
     settings = get_settings()
+    if not settings.razorpay_webhook_secret:
+        return contract_error(
+            503,
+            "integration_not_ready",
+            "Razorpay webhook verification is not configured",
+            retryable=True,
+        )
     try:
         verify_razorpay_signature(body, x_razorpay_signature, settings.razorpay_webhook_secret)
     except InvalidWebhookSignature as exc:
@@ -548,6 +563,96 @@ def checkout_event_route(
                 extra={"session_id": session_id, "event_id": ingested.dismissal_event_id},
             )
     return ingested.receipt
+
+
+@app.post(
+    "/demo/sessions/{session_id}/payments/verify",
+    response_model=CheckoutPaymentVerificationReceipt,
+    responses={
+        401: {"model": APIError},
+        409: {"model": APIError},
+        410: {"model": APIError},
+        429: {"model": APIError},
+        502: {"model": APIError},
+        503: {"model": APIError},
+    },
+)
+def checkout_payment_verification_route(
+    session_id: str,
+    payload: CheckoutPaymentVerificationRequest,
+    session: SessionDep,
+    provider: PaymentProviderDep,
+    limiter: DemoRateLimiterDep,
+    x_leakproof_session_token: str = Header(default=""),
+    x_leakproof_recovery_token: str = Header(default=""),
+) -> CheckoutPaymentVerificationReceipt | JSONResponse:
+    if not x_leakproof_session_token and not x_leakproof_recovery_token:
+        return contract_error(
+            401,
+            "payment_verification_token_required",
+            "a session or recovery token is required",
+        )
+    try:
+        return verify_checkout_payment(
+            session,
+            session_id,
+            payload,
+            provider=provider,
+            limiter=limiter,
+            settings=get_settings(),
+            session_token=x_leakproof_session_token,
+            recovery_token=x_leakproof_recovery_token,
+        )
+    except DemoSessionUnauthorized:
+        return contract_error(
+            401,
+            "invalid_payment_verification_token",
+            "payment verification authorization is invalid",
+        )
+    except CheckoutPaymentProofInvalid:
+        return contract_error(
+            401,
+            "invalid_checkout_payment_proof",
+            "Razorpay payment proof is invalid",
+        )
+    except DemoSessionExpired:
+        return contract_error(410, "session_expired", "demo session has expired")
+    except CheckoutPaymentNotCaptured:
+        return contract_error(
+            409,
+            "payment_not_captured",
+            "Razorpay has not captured the payment yet; retry verification shortly",
+            retryable=True,
+        )
+    except DemoRateLimitExceeded as exc:
+        return contract_error(
+            429,
+            "rate_limit_exceeded",
+            "payment verification limit exceeded",
+            retryable=True,
+            headers={"Retry-After": str(max(1, exc.retry_after_seconds))},
+        )
+    except RateLimitUnavailable:
+        return contract_error(
+            503,
+            "rate_limit_unavailable",
+            "payment verification is temporarily unavailable",
+            retryable=True,
+        )
+    except CheckoutPaymentVerificationUnavailable:
+        return contract_error(
+            503,
+            "test_payment_verification_unavailable",
+            "Razorpay test-mode payment verification is not configured",
+            retryable=True,
+        )
+    except ProviderError as exc:
+        return contract_error(
+            503 if exc.retryable else 502,
+            exc.error_class,
+            "Razorpay payment-state verification failed",
+            retryable=exc.retryable,
+        )
 
 
 @app.get(

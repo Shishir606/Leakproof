@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from leakproof.api.access_logging import RecoveryCapabilityFilter, redact_recovery_target
 from leakproof.api.app import app
 from leakproof.api.auth import OperatorPrincipal, get_operator_principal
 from leakproof.models.domain import LeakType
@@ -136,3 +137,31 @@ def test_operator_token_is_absent_from_public_json_and_built_client_assets(clien
         for path in build_dir.rglob("*"):
             if path.is_file():
                 assert token_bytes not in path.read_bytes(), path
+
+
+def test_dashboard_proxy_forwards_recovery_authorization_header():
+    proxy_source = (
+        Path(__file__).parents[1] / "dashboard" / "lib" / "backend-proxy.ts"
+    ).read_text(encoding="utf-8")
+
+    assert 'request.headers.get("x-leakproof-recovery-token")' in proxy_source
+    assert 'headers.set("x-leakproof-recovery-token", recoveryToken)' in proxy_source
+
+
+def test_recovery_capability_is_redacted_from_uvicorn_access_logs():
+    token = "signed-capability.payload-signature"
+    record = __import__("logging").LogRecord(
+        "uvicorn.access",
+        20,
+        "",
+        0,
+        '%s - "%s %s HTTP/%s" %d',
+        ("127.0.0.1", "GET", f"/recover/{token}?source=email", "1.1", 200),
+        None,
+    )
+
+    assert RecoveryCapabilityFilter().filter(record)
+    rendered = record.getMessage()
+    assert token not in rendered
+    assert "/recover/[REDACTED]?source=email" in rendered
+    assert redact_recovery_target("/health/ready") == "/health/ready"

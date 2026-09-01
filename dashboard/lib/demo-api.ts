@@ -1,8 +1,10 @@
 import type {
   ApiErrorPayload,
   CheckoutEvent,
+  CheckoutPaymentVerificationReceipt,
   DemoSession,
   DemoSessionProjection,
+  RazorpaySuccess,
   RecoveryBootstrap,
 } from "./demo-types";
 
@@ -57,6 +59,29 @@ export async function sendCheckoutEvent(
     },
   );
   await readResponse(response);
+}
+
+export async function verifyCheckoutPayment(
+  sessionId: string,
+  proof: RazorpaySuccess,
+  authorization: { sessionToken?: string; recoveryToken?: string },
+): Promise<CheckoutPaymentVerificationReceipt> {
+  const headers = new Headers({ "content-type": "application/json" });
+  if (authorization.sessionToken) {
+    headers.set("x-leakproof-session-token", authorization.sessionToken);
+  }
+  if (authorization.recoveryToken) {
+    headers.set("x-leakproof-recovery-token", authorization.recoveryToken);
+  }
+  const response = await fetch(
+    `/api/demo/sessions/${encodeURIComponent(sessionId)}/payments/verify`,
+    {
+      method: "POST",
+      headers,
+      body: JSON.stringify(proof),
+    },
+  );
+  return readResponse<CheckoutPaymentVerificationReceipt>(response);
 }
 
 export async function getSessionProjection(

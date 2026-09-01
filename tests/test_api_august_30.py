@@ -163,9 +163,7 @@ def test_razorpay_adapter_retries_temporary_failure_and_rejects_mismatch():
         "rzp_test_key", "secret", client=client, sleep=lambda _: None
     )
     with pytest.raises(ProviderError, match="amount or currency") as raised:
-        provider.create_order(
-            CreateOrderRequest(50_000, "INR", "receipt", "idempotency", {})
-        )
+        provider.create_order(CreateOrderRequest(50_000, "INR", "receipt", "idempotency", {}))
 
     assert calls == 2
     assert raised.value.error_class == "response_mismatch"
@@ -287,7 +285,7 @@ def test_dismissal_route_enqueues_once_and_duplicate_is_safe(client, monkeypatch
     assert scheduled == [
         {
             "args": [created["session_id"], first.json()["event_id"]],
-                "countdown": 7,
+            "countdown": 7,
         }
     ]
 
@@ -339,7 +337,7 @@ def test_due_dismissal_creates_one_live_abandonment_case(session_factory):
         assert session.scalar(select(func.count()).select_from(Event)) == 2
 
 
-@pytest.mark.parametrize("payment_status", ["failed", "authorized", "captured"])
+@pytest.mark.parametrize("payment_status", ["authorized", "captured"])
 def test_provider_payment_state_prevents_false_abandonment(session_factory, payment_status: str):
     provider = FakePaymentProvider()
     with session_factory() as session:
@@ -375,6 +373,55 @@ def test_provider_payment_state_prevents_false_abandonment(session_factory, paym
         assert session.scalar(select(func.count()).select_from(RecoveryCase)) == 0
 
 
+def test_provider_api_failed_payment_creates_payment_failure_without_webhook(
+    session_factory,
+):
+    provider = FakePaymentProvider()
+    with session_factory() as session:
+        created, _, limiter, settings = create_session(session, provider=provider)
+        provider.payments["pay-existing-failure"] = Payment(
+            id="pay-existing-failure",
+            order_id=created.razorpay_order_id,
+            amount_paise=created.amount_paise,
+            currency="INR",
+            status="failed",
+            method="card",
+        )
+        ingested = ingest_checkout_event(
+            session,
+            created.session_id,
+            checkout_event("checkout_dismissed", "dismiss-failed-payment"),
+            session_token=created.session_token,
+            limiter=limiter,
+            settings=settings,
+            now=NOW + timedelta(seconds=1),
+        )
+
+        case_id = materialize_checkout_abandonment(
+            session,
+            created.session_id,
+            ingested.dismissal_event_id,
+            provider=provider,
+            settings=settings,
+            now=NOW + timedelta(seconds=31),
+        )
+        case = session.get(RecoveryCase, case_id)
+        detected = session.scalar(
+            select(Event).where(Event.case_id == case_id, Event.kind == "DETECTED")
+        )
+
+        assert case.leak_type == "PAYMENT_FAILURE"
+        assert case.dedupe_key == live_case_dedupe_key(
+            created.session_id, created.razorpay_order_id
+        )
+        assert detected.payload["evidence"] == {
+            "source": "razorpay_payment_api",
+            "error_reason": "provider_reported_failed",
+            "method": "card",
+            "payment_status": "failed",
+        }
+
+
 def test_later_attempt_invalidates_dismissal_and_rescue_scan(session_factory):
     with session_factory() as session:
         created, provider, limiter, settings = create_session(session)
@@ -397,9 +444,10 @@ def test_later_attempt_invalidates_dismissal_and_rescue_scan(session_factory):
             now=NOW + timedelta(seconds=5),
         )
 
-        assert due_abandonment_checks(
-            session, settings=settings, now=NOW + timedelta(seconds=40)
-        ) == []
+        assert (
+            due_abandonment_checks(session, settings=settings, now=NOW + timedelta(seconds=40))
+            == []
+        )
         assert (
             materialize_checkout_abandonment(
                 session,

@@ -85,9 +85,7 @@ def test_live_demo_rejects_non_test_razorpay_keys():
 
 
 def test_live_demo_accepts_safe_configuration_and_normalizes_allowlist():
-    settings = live_settings(
-        demo_email_allowlist="Reviewer@Example.com, second@example.com"
-    )
+    settings = live_settings(demo_email_allowlist="Reviewer@Example.com, second@example.com")
 
     assert settings.allowed_demo_emails == {
         "reviewer@example.com",
@@ -292,6 +290,7 @@ def test_public_route_contracts_are_published_in_openapi(client):
     assert {
         "/demo/sessions",
         "/demo/sessions/{session_id}/checkout-events",
+        "/demo/sessions/{session_id}/payments/verify",
         "/demo/sessions/{session_id}",
         "/recover/{signed_token}",
         "/webhooks/razorpay",

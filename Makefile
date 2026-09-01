@@ -1,4 +1,8 @@
-.PHONY: install lint test test-coverage dashboard-check eval-gates security-tests acceptance-tests release-gate test-august-27 test-august-28 test-august-29 test-api-august-29 test-api-august-30 test-api-august-31 test-api-september-1 test-api-september-2 test-api-september-3 test-api-september-4 test-august-30 test-august-31 test-september-1 test-september-2 test-september-3 test-september-4 evals sensitivity dashboard batch build up down migrate demo-webhook verify-foundation seed tunnel
+.PHONY: install lint test test-coverage dashboard-check container-build release-infra fresh-migration-check batch-replay public-bundle-check ai-incident-evidence eval-gates security-tests acceptance-tests release-evidence demo-recording-check release-gate-automated release-gate test-august-27 test-august-28 test-august-29 test-api-august-29 test-api-august-30 test-api-august-31 test-api-september-1 test-api-september-2 test-api-september-3 test-api-september-4 test-august-30 test-august-31 test-september-1 test-september-2 test-september-3 test-september-4 evals sensitivity dashboard batch build up down migrate demo-webhook verify-foundation seed tunnel
+
+PUBLIC_BUNDLE_CANARY := leakproof-release-browser-canary-2026-09-04
+ACCEPTANCE_ARTIFACT_DIR ?= artifacts/api-acceptance
+DEMO_RECORDING ?= artifacts/demo/leakproof-90s-backup.mp4
 
 install:
 	uv sync --extra dev
@@ -15,26 +19,61 @@ test-coverage:
 
 dashboard-check:
 	npm --prefix dashboard run check
-	npm --prefix dashboard run build
+	LEAKPROOF_OPERATOR_API_TOKEN=$(PUBLIC_BUNDLE_CANARY) npm --prefix dashboard run build
+
+container-build:
+	docker compose build api dashboard
+
+release-infra:
+	docker compose up -d --wait postgres redis
+	docker compose run --rm migrate
+	docker compose up -d api worker beat
+
+fresh-migration-check:
+	uv run python scripts/verify_fresh_migrations.py
+
+batch-replay:
+	LEAKPROOF_MODE=simulation LEAKPROOF_DATABASE_URL=postgresql+psycopg://leakproof:leakproof@localhost:55432/leakproof uv run python scripts/run_batch.py --verify-replay > /tmp/leakproof-release-gate-batch.json
+
+public-bundle-check:
+	uv run python scripts/verify_public_bundle.py --forbid $(PUBLIC_BUNDLE_CANARY)
+
+ai-incident-evidence:
+	uv run python scripts/capture_ai_incident_acceptance.py
 
 eval-gates:
-	LEAKPROOF_DATABASE_URL=postgresql+psycopg://leakproof:leakproof@localhost:55432/leakproof uv run python scripts/run_evals.py --report /tmp/leakproof-release-gate-evals.json
+	LEAKPROOF_MODE=simulation LEAKPROOF_DATABASE_URL=postgresql+psycopg://leakproof:leakproof@localhost:55432/leakproof uv run python scripts/run_evals.py --report /tmp/leakproof-release-gate-evals.json
 
 security-tests:
 	uv run pytest tests/test_api_security.py
 
 acceptance-tests:
-	uv run pytest tests/test_api_september_4.py tests/test_foundation_verifier.py
+	uv run pytest tests/test_api_september_4.py tests/test_foundation_verifier.py tests/test_acceptance_artifacts.py
 
-release-gate:
+release-evidence:
+	uv run python scripts/validate_acceptance_artifacts.py --directory $(ACCEPTANCE_ARTIFACT_DIR) --require-live --require-both-hero-paths
+
+demo-recording-check:
+	uv run python scripts/validate_demo_recording.py --path $(DEMO_RECORDING)
+
+release-gate-automated:
+	$(MAKE) container-build
+	$(MAKE) release-infra
+	$(MAKE) fresh-migration-check
 	$(MAKE) lint
 	$(MAKE) test-coverage
 	$(MAKE) dashboard-check
+	$(MAKE) public-bundle-check
 	$(MAKE) verify-foundation
 	$(MAKE) verify-foundation
+	$(MAKE) batch-replay
 	$(MAKE) eval-gates
+	$(MAKE) ai-incident-evidence
 	$(MAKE) security-tests
 	$(MAKE) acceptance-tests
+
+release-gate: release-gate-automated
+	$(MAKE) release-evidence
 
 test-august-27:
 	uv run pytest tests/test_diagnosis.py tests/test_guardrails.py tests/test_templates.py

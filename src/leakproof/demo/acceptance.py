@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from leakproof.audit.timeline import replay_case
 from leakproof.config import Settings
 from leakproof.demo.contracts import (
     AcceptanceCaseSummary,
@@ -13,8 +15,10 @@ from leakproof.demo.contracts import (
     DemoAcceptanceExport,
     DemoSessionState,
     TimelineItem,
+    live_case_dedupe_key,
 )
 from leakproof.demo.projection import get_demo_session_projection
+from leakproof.models.db import DemoSession, ProviderCall, RecoveryCase, WebhookEvent
 
 
 def _utc(value: datetime) -> datetime:
@@ -39,6 +43,8 @@ def build_demo_acceptance_export(
         now=exported_at,
     )
     case = projection.case
+    demo = session.get(DemoSession, session_id)
+    case_row = session.get(RecoveryCase, case.case_id) if case is not None else None
     recovery_action_registered = any(
         action.action_type == "recovery_link" for action in projection.recovery_actions
     )
@@ -56,6 +62,72 @@ def build_demo_acceptance_export(
     insight_resolved = case is not None and case.insight_status in {"succeeded", "fallback"}
     recovered = projection.state == DemoSessionState.RECOVERED
     closed = case is not None and case.state == "CLOSED"
+    original_order_reused = (
+        demo is not None
+        and case_row is not None
+        and case_row.dedupe_key == live_case_dedupe_key(demo.id, demo.razorpay_order_id)
+    )
+    success_webhooks = list(
+        session.scalars(
+            select(WebhookEvent).where(
+                WebhookEvent.merchant_id == (demo.merchant_id if demo is not None else ""),
+                WebhookEvent.provider == "razorpay",
+                WebhookEvent.event_type.in_(["payment.captured", "order.paid"]),
+                WebhookEvent.processed_at.is_not(None),
+            )
+        )
+    )
+    webhook_verified = (
+        recovered
+        and demo is not None
+        and any(
+            (
+                item.event_type == "payment.captured"
+                and ((item.payload.get("payload") or {}).get("payment") or {})
+                .get("entity", {})
+                .get("order_id")
+                == demo.razorpay_order_id
+            )
+            or (
+                item.event_type == "order.paid"
+                and ((item.payload.get("payload") or {}).get("order") or {})
+                .get("entity", {})
+                .get("id")
+                == demo.razorpay_order_id
+            )
+            for item in success_webhooks
+        )
+    )
+    checkout_verified = (
+        recovered
+        and demo is not None
+        and session.scalar(
+            select(ProviderCall.id).where(
+                ProviderCall.session_id == demo.id,
+                ProviderCall.provider == "razorpay",
+                ProviderCall.operation == "verify_checkout_payment",
+                ProviderCall.status == "succeeded",
+            )
+        )
+        is not None
+    )
+    provider_verified = webhook_verified or checkout_verified
+    no_pending_contacts = not any(
+        action.action_type == "email_link" and action.status == "pending"
+        for action in projection.recovery_actions
+    )
+    recovered_amount_matches = (
+        recovered
+        and projection.metrics.recovered_cases == 1
+        and projection.metrics.recovered_amount_paise == projection.amount_paise
+    )
+    replay_matches = False
+    if case_row is not None:
+        replay_matches = replay_case(session, case_row.id).projection_matches
+    blocking_provider_failure = any(
+        item.provider == "razorpay" and item.status == "failed"
+        for item in projection.provider_statuses
+    )
     checks = [
         AcceptanceCheck(
             check="case_detected",
@@ -91,13 +163,52 @@ def build_demo_acceptance_export(
             check="original_order_recovered",
             passed=recovered,
             severity="blocking",
-            detail="Webhook truth marked the original demo order as recovered.",
+            detail="Server-verified Razorpay truth marked the original demo order as recovered.",
+        ),
+        AcceptanceCheck(
+            check="original_order_reused",
+            passed=original_order_reused,
+            severity="blocking",
+            detail="The recovery stayed bound to the order that created the case.",
+        ),
+        AcceptanceCheck(
+            check="provider_verified_payment",
+            passed=provider_verified,
+            severity="blocking",
+            detail=(
+                "A signed webhook or signed Checkout result plus captured-payment API check "
+                "entered the verification timeline."
+            ),
         ),
         AcceptanceCheck(
             check="same_case_closed",
             passed=closed,
             severity="blocking",
             detail="The detected case closed after the verified payment.",
+        ),
+        AcceptanceCheck(
+            check="pending_contacts_cancelled",
+            passed=no_pending_contacts,
+            severity="blocking",
+            detail="No pending customer-contact action remains after recovery.",
+        ),
+        AcceptanceCheck(
+            check="session_recovered_amount_correct",
+            passed=recovered_amount_matches,
+            severity="blocking",
+            detail="Current-session recovery metrics contain exactly this order amount.",
+        ),
+        AcceptanceCheck(
+            check="audit_projection_replay_matches",
+            passed=replay_matches,
+            severity="blocking",
+            detail="The append-only event replay matches the stored case projection.",
+        ),
+        AcceptanceCheck(
+            check="no_blocking_provider_failure",
+            passed=not blocking_provider_failure,
+            severity="blocking",
+            detail="No Razorpay provider failure blocks order creation or verification.",
         ),
         AcceptanceCheck(
             check="no_provider_failures",

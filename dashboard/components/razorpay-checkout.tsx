@@ -7,6 +7,7 @@ import {
   DemoApiError,
   getRecoveryBootstrap,
   sendCheckoutEvent,
+  verifyCheckoutPayment,
 } from "@/lib/demo-api";
 import type {
   CheckoutEvent,
@@ -25,6 +26,7 @@ let sdkPromise: Promise<void> | undefined;
 
 type CheckoutState = "idle" | "preparing" | "open" | "failed" | "completed";
 type CheckoutOutcome = "failed" | "completed";
+type VerificationAuthorization = { sessionToken?: string; recoveryToken?: string };
 type PublicCheckout = Pick<
   DemoSession,
   | "session_id"
@@ -140,9 +142,30 @@ function failureMessage(response: RazorpayFailure) {
   );
 }
 
+async function verifyCapturedPayment(
+  sessionId: string,
+  response: Parameters<typeof verifyCheckoutPayment>[1],
+  authorization: VerificationAuthorization,
+) {
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      return await verifyCheckoutPayment(sessionId, response, authorization);
+    } catch (error) {
+      const waitingForCapture =
+        error instanceof DemoApiError &&
+        error.code === "payment_not_captured" &&
+        error.retryable;
+      if (!waitingForCapture || attempt === 5) throw error;
+      await new Promise((resolve) => window.setTimeout(resolve, attempt * 500));
+    }
+  }
+  throw new Error("Payment verification did not complete.");
+}
+
 function openCheckout({
   checkout,
   session,
+  verificationAuthorization,
   recovery,
   setState,
   setMessage,
@@ -150,6 +173,7 @@ function openCheckout({
 }: {
   checkout: PublicCheckout;
   session?: DemoSession;
+  verificationAuthorization: VerificationAuthorization;
   recovery: boolean;
   setState: (state: CheckoutState) => void;
   setMessage: (message: string) => void;
@@ -171,7 +195,7 @@ function openCheckout({
     notes: { leakproof_session_id: checkout.session_id },
     retry: { enabled: true },
     theme: { color: "#3157d5", backdrop_color: "#14213d" },
-    handler: (response) => {
+    handler: async (response) => {
       if (response.razorpay_order_id !== checkout.razorpay_order_id) {
         setState("failed");
         setMessage("Checkout returned a different order. Nothing was accepted.");
@@ -179,17 +203,29 @@ function openCheckout({
         return;
       }
       completed = true;
-      setState("completed");
-      setMessage(
-        "Payment submitted. Razorpay’s signed webhook will verify it before Leakproof marks the order recovered.",
-      );
-      const completion = newTelemetry("checkout_completed", { attempt_id: attemptId });
-      if (session) {
-        // Keep the session available to the live dashboard until a signed provider
-        // webhook marks it recovered or the session expires. Browser completion is advisory.
-        void deliverTelemetry(session, completion);
+      setState("preparing");
+      setMessage("Payment submitted. Verifying Razorpay’s signature and captured status…");
+      try {
+        await verifyCapturedPayment(
+          checkout.session_id,
+          response,
+          verificationAuthorization,
+        );
+        setState("completed");
+        setMessage(
+          "Payment verified server-side against the original Razorpay test order and captured status.",
+        );
+        const completion = newTelemetry("checkout_completed", { attempt_id: attemptId });
+        if (session) void deliverTelemetry(session, completion);
+        onOutcome("completed");
+      } catch (error) {
+        setState("failed");
+        setMessage(
+          error instanceof DemoApiError
+            ? error.message
+            : "Payment was submitted, but server verification did not complete. Nothing was marked recovered.",
+        );
       }
-      onOutcome("completed");
     },
     modal: {
       confirm_close: true,
@@ -205,12 +241,13 @@ function openCheckout({
   const instance = new window.Razorpay(options);
   instance.on("payment.submit", () => {
     attemptId = eventId();
-    setMessage("Payment attempt started. Razorpay’s webhook remains the source of truth.");
+    setMessage("Payment attempt started. Only server-verified Razorpay truth can close the case.");
     track(newTelemetry("payment_attempt_started", { attempt_id: attemptId }));
   });
   instance.on("payment.failed", (response) => {
     setState("failed");
     setMessage(failureMessage(response));
+    track(newTelemetry("checkout_dismissed", { dismissed_by: "browser" }));
     onOutcome("failed");
   });
   instance.open();
@@ -224,7 +261,7 @@ function CheckoutStatus({ state, message }: { state: CheckoutState; message: str
     <div className={`checkout-status checkout-status-${state}`} role="status" aria-live="polite">
       <span className="checkout-status-dot" />
       <div>
-        <strong>{state === "completed" ? "Payment submitted" : state === "failed" ? "Needs attention" : state === "open" ? "Checkout open" : state === "preparing" ? "Preparing order" : "Ready when you are"}</strong>
+        <strong>{state === "completed" ? "Payment verified" : state === "failed" ? "Needs attention" : state === "open" ? "Checkout open" : state === "preparing" ? "Verifying" : "Ready when you are"}</strong>
         <p>{message}</p>
       </div>
     </div>
@@ -285,6 +322,7 @@ export function DemoCheckout() {
       openCheckout({
         checkout: active,
         session: active,
+        verificationAuthorization: { sessionToken: active.session_token },
         recovery: false,
         setState,
         setMessage,
@@ -303,7 +341,7 @@ export function DemoCheckout() {
       <div className="checkout-card-copy">
         <span className="checkout-step">01 · Test the leak</span>
         <h2>Open a real Razorpay test Checkout.</h2>
-        <p>Dismiss it, trigger a test failure, or complete it. Leakproof records bounded browser signals while Razorpay webhooks decide payment truth.</p>
+        <p>Dismiss it, trigger a test failure, or complete it. Leakproof records bounded browser signals while server-verified Razorpay sandbox truth decides payment success.</p>
       </div>
       <label className="checkout-field">
         <span>Recovery email <small>optional</small></span>
@@ -361,6 +399,7 @@ export function RecoveryCheckout({ token }: { token: string }) {
     try {
       openCheckout({
         checkout: bootstrap,
+        verificationAuthorization: { recoveryToken: token },
         recovery: true,
         setState,
         setMessage,

@@ -78,7 +78,6 @@ class Settings(BaseSettings):
                 "recovery_token_secret",
                 "razorpay_key_id",
                 "razorpay_key_secret",
-                "razorpay_webhook_secret",
                 "resend_webhook_secret",
             )
             if not getattr(self, name).strip()
@@ -92,9 +91,7 @@ class Settings(BaseSettings):
                 if not getattr(self, name).strip()
             )
         if missing:
-            raise ValueError(
-                "live_demo configuration is incomplete: " + ", ".join(sorted(missing))
-            )
+            raise ValueError("live_demo configuration is incomplete: " + ", ".join(sorted(missing)))
 
         parsed_url = urlsplit(self.public_base_url)
         if parsed_url.scheme != "https" or not parsed_url.netloc:

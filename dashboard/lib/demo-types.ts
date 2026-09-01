@@ -133,6 +133,13 @@ export type RazorpaySuccess = {
   razorpay_signature: string;
 };
 
+export type CheckoutPaymentVerificationReceipt = {
+  verified: true;
+  duplicate: boolean;
+  state: "RECOVERED";
+  payment_status: "captured";
+};
+
 export type RazorpayFailure = {
   error?: {
     description?: string;

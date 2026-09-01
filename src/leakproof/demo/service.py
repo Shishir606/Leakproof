@@ -13,6 +13,8 @@ from leakproof.demo.contracts import (
     CheckoutEventReceipt,
     CheckoutEventRequest,
     CheckoutEventType,
+    CheckoutPaymentVerificationReceipt,
+    CheckoutPaymentVerificationRequest,
     DemoSessionCreated,
     DemoSessionCreateRequest,
     DemoSessionState,
@@ -23,6 +25,7 @@ from leakproof.demo.contracts import (
 )
 from leakproof.demo.rate_limit import InMemoryRateLimiter, RedisRateLimiter
 from leakproof.demo.security import (
+    InvalidCheckoutPaymentSignature,
     InvalidRecoveryToken,
     InvalidSessionToken,
     RecoveryTokenExpired,
@@ -31,6 +34,7 @@ from leakproof.demo.security import (
     issue_recovery_token,
     issue_session_token,
     recipient_hash,
+    verify_checkout_payment_signature,
     verify_recovery_token,
     verify_session_token,
 )
@@ -44,7 +48,13 @@ from leakproof.models.db import (
 )
 from leakproof.models.domain import Arm, LeakType
 from leakproof.providers import CreateOrderRequest, PaymentProvider, ProviderError
-from leakproof.services import NormalizedSignal, new_id, record_signal
+from leakproof.services import (
+    NormalizedSignal,
+    PaidSignal,
+    new_id,
+    record_paid_signal,
+    record_signal,
+)
 
 RateLimiter = RedisRateLimiter | InMemoryRateLimiter
 
@@ -69,6 +79,18 @@ class RecoveryOrderNotAvailable(ValueError):
     pass
 
 
+class CheckoutPaymentProofInvalid(ValueError):
+    pass
+
+
+class CheckoutPaymentNotCaptured(ValueError):
+    pass
+
+
+class CheckoutPaymentVerificationUnavailable(ValueError):
+    pass
+
+
 @dataclass(frozen=True)
 class DemoRateLimitExceeded(RuntimeError):
     retry_after_seconds: int
@@ -79,6 +101,35 @@ class DemoRateLimitExceeded(RuntimeError):
 class CheckoutEventIngested:
     receipt: CheckoutEventReceipt
     dismissal_event_id: int | None = None
+
+
+def _record_checkout_verification(
+    session: Session,
+    *,
+    session_id: str,
+    status: str,
+    latency_ms: int,
+    payment_status: str | None = None,
+    request_id: str | None = None,
+    error_class: str | None = None,
+) -> None:
+    metadata: dict[str, str | bool] = {
+        "verification_source": "checkout_signature_plus_payment_api",
+        "signature_checked_server_side": True,
+    }
+    if payment_status:
+        metadata["payment_status"] = payment_status
+    _record_provider_call(
+        session,
+        session_id=session_id,
+        provider="razorpay",
+        operation="verify_checkout_payment",
+        request_id=request_id,
+        latency_ms=latency_ms,
+        status=status,
+        metadata=metadata,
+        error_class=error_class,
+    )
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -198,8 +249,7 @@ def create_demo_session(
 
     normalized_recipient = request.recipient
     allowlisted = (
-        normalized_recipient is not None
-        and normalized_recipient in settings.allowed_demo_emails
+        normalized_recipient is not None and normalized_recipient in settings.allowed_demo_emails
     )
     demo = DemoSession(
         id=session_id,
@@ -399,9 +449,7 @@ def ingest_checkout_event(
     if claims.session_id != session_id:
         raise DemoSessionUnauthorized("session token does not match the requested session")
 
-    demo = session.scalar(
-        select(DemoSession).where(DemoSession.id == session_id).with_for_update()
-    )
+    demo = session.scalar(select(DemoSession).where(DemoSession.id == session_id).with_for_update())
     if demo is None or claims.merchant_id != demo.merchant_id:
         raise DemoSessionUnauthorized("invalid session token")
     if _as_utc(demo.expires_at) <= now or DemoSessionState(demo.state) == DemoSessionState.EXPIRED:
@@ -469,6 +517,184 @@ def ingest_checkout_event(
     )
 
 
+def verify_checkout_payment(
+    session: Session,
+    session_id: str,
+    request: CheckoutPaymentVerificationRequest,
+    *,
+    provider: PaymentProvider,
+    limiter: RateLimiter,
+    settings: Settings,
+    session_token: str = "",
+    recovery_token: str = "",
+    now: datetime | None = None,
+) -> CheckoutPaymentVerificationReceipt:
+    """Close a demo only after Razorpay signature and captured-payment API verification."""
+    now = _as_utc(now or datetime.now(UTC))
+    if not settings.razorpay_key_id.startswith("rzp_test_") or not settings.razorpay_key_secret:
+        raise CheckoutPaymentVerificationUnavailable(
+            "Razorpay test-mode payment verification is not configured"
+        )
+
+    secret = _signing_secret(settings)
+    if session_token:
+        try:
+            claims = verify_session_token(session_token, secret, now=now)
+        except SessionTokenExpired as exc:
+            raise DemoSessionExpired("demo session has expired") from exc
+        except InvalidSessionToken as exc:
+            raise DemoSessionUnauthorized("invalid session token") from exc
+        if claims.session_id != session_id:
+            raise DemoSessionUnauthorized("session token does not match the requested session")
+        authorized_merchant_id = claims.merchant_id
+        recovery_claims = None
+    elif recovery_token:
+        try:
+            recovery_claims = verify_recovery_token(recovery_token, secret, now=now)
+        except RecoveryTokenExpired as exc:
+            raise DemoSessionExpired("recovery token has expired") from exc
+        except InvalidRecoveryToken as exc:
+            raise DemoSessionUnauthorized("invalid recovery token") from exc
+        if recovery_claims.session_id != session_id:
+            raise DemoSessionUnauthorized("recovery token does not match the requested session")
+        authorized_merchant_id = recovery_claims.merchant_id
+    else:
+        raise DemoSessionUnauthorized("payment verification token is required")
+
+    demo = session.scalar(select(DemoSession).where(DemoSession.id == session_id).with_for_update())
+    if demo is None or demo.merchant_id != authorized_merchant_id:
+        raise DemoSessionUnauthorized("invalid payment verification token")
+    if recovery_claims is not None and (
+        recovery_claims.order_id != demo.razorpay_order_id
+        or recovery_claims.amount_paise != demo.amount_paise
+        or recovery_claims.currency != demo.currency
+    ):
+        raise DemoSessionUnauthorized("invalid payment verification token")
+    if (
+        _as_utc(demo.expires_at) <= now
+        and DemoSessionState(demo.state) != DemoSessionState.RECOVERED
+    ):
+        raise DemoSessionExpired("demo session has expired")
+
+    decision = limiter.allow(
+        "demo-payment-verifications",
+        session_id,
+        limit=10,
+        window_seconds=settings.demo_session_ttl_minutes * 60,
+        now=now.timestamp(),
+    )
+    if not decision.allowed:
+        raise DemoRateLimitExceeded(decision.retry_after_seconds, "payment_verifications")
+
+    started = time.perf_counter()
+    if request.razorpay_order_id != demo.razorpay_order_id:
+        _record_checkout_verification(
+            session,
+            session_id=demo.id,
+            status="failed",
+            latency_ms=round((time.perf_counter() - started) * 1000),
+            error_class="order_mismatch",
+        )
+        session.commit()
+        raise CheckoutPaymentProofInvalid("checkout payment proof is invalid")
+    try:
+        verify_checkout_payment_signature(
+            demo.razorpay_order_id,
+            request.razorpay_payment_id,
+            request.razorpay_signature,
+            settings.razorpay_key_secret,
+        )
+    except InvalidCheckoutPaymentSignature as exc:
+        _record_checkout_verification(
+            session,
+            session_id=demo.id,
+            status="failed",
+            latency_ms=round((time.perf_counter() - started) * 1000),
+            error_class="signature_invalid",
+        )
+        session.commit()
+        raise CheckoutPaymentProofInvalid("checkout payment proof is invalid") from exc
+
+    if DemoSessionState(demo.state) == DemoSessionState.RECOVERED:
+        return CheckoutPaymentVerificationReceipt(duplicate=True)
+
+    try:
+        payment = provider.fetch_payment(request.razorpay_payment_id)
+    except ProviderError as exc:
+        session.rollback()
+        _record_checkout_verification(
+            session,
+            session_id=session_id,
+            status="failed",
+            latency_ms=round((time.perf_counter() - started) * 1000),
+            request_id=exc.request_id,
+            error_class=exc.error_class,
+        )
+        session.commit()
+        raise
+
+    if (
+        payment.id != request.razorpay_payment_id
+        or payment.order_id != demo.razorpay_order_id
+        or payment.amount_paise != demo.amount_paise
+        or payment.currency != demo.currency
+    ):
+        _record_checkout_verification(
+            session,
+            session_id=demo.id,
+            status="failed",
+            latency_ms=round((time.perf_counter() - started) * 1000),
+            payment_status=payment.status,
+            request_id=payment.request_id,
+            error_class="response_mismatch",
+        )
+        session.commit()
+        raise CheckoutPaymentProofInvalid("Razorpay payment did not match the demo order")
+    if payment.status != "captured":
+        _record_checkout_verification(
+            session,
+            session_id=demo.id,
+            status="pending",
+            latency_ms=round((time.perf_counter() - started) * 1000),
+            payment_status=payment.status,
+            request_id=payment.request_id,
+            error_class="payment_not_captured",
+        )
+        session.commit()
+        raise CheckoutPaymentNotCaptured("Razorpay has not captured the payment yet")
+
+    _record_checkout_verification(
+        session,
+        session_id=demo.id,
+        status="succeeded",
+        latency_ms=round((time.perf_counter() - started) * 1000),
+        payment_status=payment.status,
+        request_id=payment.request_id,
+    )
+    record_paid_signal(
+        session,
+        PaidSignal(
+            merchant_id=demo.merchant_id,
+            customer_id=demo.customer_id,
+            entity_id=payment.id,
+            entity_root_id=demo.razorpay_order_id,
+            amount_paise=payment.amount_paise,
+            currency=payment.currency,
+            evidence={
+                "source": "razorpay_checkout_signature_and_api",
+                "signature_verified": True,
+                "payment_status": payment.status,
+            },
+            occurred_at=now,
+        ),
+    )
+    assert_session_transition(DemoSessionState(demo.state), DemoSessionState.RECOVERED)
+    demo.state = DemoSessionState.RECOVERED.value
+    demo.updated_at = now
+    session.commit()
+    return CheckoutPaymentVerificationReceipt(duplicate=False)
+
+
 def materialize_checkout_abandonment(
     session: Session,
     session_id: str,
@@ -479,9 +705,7 @@ def materialize_checkout_abandonment(
     now: datetime | None = None,
 ) -> str | None:
     now = _as_utc(now or datetime.now(UTC))
-    demo = session.scalar(
-        select(DemoSession).where(DemoSession.id == session_id).with_for_update()
-    )
+    demo = session.scalar(select(DemoSession).where(DemoSession.id == session_id).with_for_update())
     if demo is None:
         return None
     state = DemoSessionState(demo.state)
@@ -575,34 +799,68 @@ def materialize_checkout_abandonment(
             "statuses": sorted({item.status for item in payments}),
         },
     )
+    if any(
+        payment.order_id != demo.razorpay_order_id
+        or payment.amount_paise != demo.amount_paise
+        or payment.currency != demo.currency
+        for payment in payments
+    ):
+        session.commit()
+        raise ProviderError(
+            provider="razorpay",
+            operation="list_order_payments",
+            error_class="response_mismatch",
+            retryable=False,
+            message="Razorpay payment state did not match the demo order",
+        )
     if any(payment.status in {"captured", "authorized"} for payment in payments):
         session.commit()
         return None
-    if any(payment.status == "failed" for payment in payments):
-        session.commit()
-        return None
-
-    signal = NormalizedSignal(
-        merchant_id=demo.merchant_id,
-        customer_id=demo.customer_id,
-        leak_type=LeakType.CHECKOUT_ABANDON,
-        entity_type="order",
-        entity_id=demo.razorpay_order_id,
-        entity_root_id=demo.razorpay_order_id,
-        amount_at_risk=demo.amount_paise,
-        currency=demo.currency,
-        evidence={
-            "source": "browser_telemetry",
-            "error_reason": "checkout_abandoned",
-            "session_id": demo.id,
-            "dismissal_event_id": dismissal.id,
-            "dismissed_at": _as_utc(dismissal.received_at).isoformat(),
-            "inactivity_seconds": settings.demo_abandonment_delay_seconds,
-        },
-        occurred_at=now,
-        dedupe_key_override=key,
-        arm_override=Arm.TREATMENT,
+    failed_payment = next(
+        (payment for payment in reversed(payments) if payment.status == "failed"), None
     )
+    if failed_payment is not None:
+        signal = NormalizedSignal(
+            merchant_id=demo.merchant_id,
+            customer_id=demo.customer_id,
+            leak_type=LeakType.PAYMENT_FAILURE,
+            entity_type="payment",
+            entity_id=failed_payment.id,
+            entity_root_id=demo.razorpay_order_id,
+            amount_at_risk=demo.amount_paise,
+            currency=demo.currency,
+            evidence={
+                "source": "razorpay_payment_api",
+                "error_reason": "provider_reported_failed",
+                "method": failed_payment.method or "unknown",
+                "payment_status": failed_payment.status,
+            },
+            occurred_at=now,
+            dedupe_key_override=key,
+            arm_override=Arm.TREATMENT,
+        )
+    else:
+        signal = NormalizedSignal(
+            merchant_id=demo.merchant_id,
+            customer_id=demo.customer_id,
+            leak_type=LeakType.CHECKOUT_ABANDON,
+            entity_type="order",
+            entity_id=demo.razorpay_order_id,
+            entity_root_id=demo.razorpay_order_id,
+            amount_at_risk=demo.amount_paise,
+            currency=demo.currency,
+            evidence={
+                "source": "browser_telemetry",
+                "error_reason": "checkout_abandoned",
+                "session_id": demo.id,
+                "dismissal_event_id": dismissal.id,
+                "dismissed_at": _as_utc(dismissal.received_at).isoformat(),
+                "inactivity_seconds": settings.demo_abandonment_delay_seconds,
+            },
+            occurred_at=now,
+            dedupe_key_override=key,
+            arm_override=Arm.TREATMENT,
+        )
     case, _ = record_signal(session, signal)
     assert_session_transition(DemoSessionState(demo.state), DemoSessionState.AT_RISK)
     demo.state = DemoSessionState.AT_RISK.value

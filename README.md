@@ -18,12 +18,23 @@ These API and dashboard labels are not interchangeable.
 
 | Label | What is shipped | What it does not claim |
 |---|---|---|
-| `LIVE_PROVIDER_VERIFIED` | One Razorpay test-mode recovery loop covering payment failure and checkout abandonment, closed only by a provider success webhook | Live invoice, subscription, mandate, voice, or autonomous money movement |
+| `LIVE_PROVIDER_VERIFIED` | One Razorpay test-mode recovery loop covering payment failure and checkout abandonment, closed only by a signed Checkout result plus captured-payment API verification or a signed success webhook | Live invoice, subscription, mandate, voice, or autonomous money movement |
 | `SIMULATED_END_TO_END` | Scenario Lab coverage for payment failure, checkout abandonment, invoice overdue, subscription halt, and mandate broken | Realized merchant revenue or provider-verified recovery |
 | `ARCHITECTURE_READY` | Bounded voice/promise and provider-adapter boundaries without a connected live provider | A live customer-contact integration |
 
 `GET /capabilities` publishes the same safe matrix. Scenario Lab rejects anything other than
 `SIMULATED_END_TO_END`; Live Demo rejects anything other than `LIVE_PROVIDER_VERIFIED`.
+
+## Declared limitations
+
+- Razorpay evidence is test-mode integration evidence, not production payment volume or realized
+  recovery lift.
+- Scenario Lab financial output is a simulated estimate derived from declared treatment effects,
+  contribution margin, costs, exclusions, seeds, and uncertainty intervals.
+- The operator bearer credential is buildathon containment. Production requires merchant identity,
+  OAuth/RBAC, rotation, and an authenticated operator surface.
+- Invoice, subscription, mandate, voice, Resend recipient delivery, and additional provider adapters
+  remain simulated, preview-only, or architecture-ready exactly as labelled above.
 
 ```text
 Razorpay webhook                                  Fixed-seed merchant simulator
@@ -76,15 +87,31 @@ volume.
 An immutable seed-42 circuit-breaker audit export is committed at
 `samples/seed-42-audit.json` for review without a running stack.
 
-## Run the August 25–September 4 slices
+## Quick setup and final release
 
 Docker Desktop must be running.
+
+This release path is sandbox-only. It requires Razorpay Test Mode keys (`rzp_test_…`) but does not
+require Live Mode activation, KYC, a settlement bank account, or real payment details. The
+application rejects `rzp_live_…` keys.
 
 ```bash
 cp .env.example .env
 # Set LEAKPROOF_OPERATOR_API_TOKEN to: openssl rand -base64 32
 make up
 curl http://localhost:8000/health/ready
+```
+
+After the two human-authorized Razorpay test-mode rehearsals have produced the sanitized artifacts
+described in the release runbook, the single final submission command is:
+
+```bash
+make release-gate
+```
+
+For historical checkpoint verification, the individual slices remain available:
+
+```bash
 make demo-webhook
 make verify-foundation
 make seed
@@ -105,7 +132,6 @@ make test-september-3
 make test-september-4
 make batch
 make evals
-make release-gate
 ```
 
 The `make up` path builds one `leakproof-app:latest` application image, starts Postgres and Redis,
@@ -123,12 +149,17 @@ unless `LEAKPROOF_OPERATOR_UI_ENABLED=true` on a separately protected operator s
 is attached only by Next.js server code and is never returned to the browser. Production must
 replace this buildathon boundary with merchant identity plus OAuth/RBAC.
 
-The public recovery API is implemented through the 4 September checkpoint. Razorpay failure and
-success webhooks bind to the original demo order, failure replaces abandonment without creating a
-second case, and either success event closes that case while cancelling pending actions. Recovery
+The public recovery API is implemented through the 4 September checkpoint. A failed test payment
+can be confirmed by the server through the original order's Razorpay payment API even when no
+Dashboard webhook is configured; signed failure webhooks remain a complementary reconciliation
+path. A Checkout success closes a case only after the server recomputes Razorpay's HMAC using the
+server-owned order ID, fetches the payment, and confirms `captured`, matching order, amount, and
+currency. Signed success webhooks converge on the same idempotent close path. Recovery
 links use signed 30-minute tokens bound to session, merchant, order, amount, and currency; the
 bootstrap route rechecks Razorpay payment state and reuses only the original unpaid order. Run the
 Razorpay checkpoint with `make test-api-august-31`.
+Uvicorn access logging replaces the signed capability segment with `[REDACTED]` before rendering a
+recovery request line.
 
 Live cases now receive an asynchronous `gpt-5.6-luna` explanation after deterministic Tier 1
 diagnosis. Only the failure class, payment method, amount band, and allowlisted provider
@@ -173,10 +204,15 @@ waits independently for three distinct processed inbox rows, verifies the semant
 proves PostgreSQL rejects both updates and deletes against its audit timeline. Timeout output
 includes inbox/processed counts, event kinds, attempts, and redacted error summaries.
 
-`make release-gate` is the single fail-fast submission command. It runs lint, the full Python suite
-with an 85% coverage floor, dashboard typecheck and production build, foundation verification twice
-against the reused database, evaluation gates, focused API-security tests, and acceptance artifact
-schema/redaction tests.
+`make release-gate` is the single fail-fast submission command. It builds the API and dashboard
+images, migrates a disposable PostgreSQL database from zero and reuses it once, runs lint and the
+full Python suite with an 85% coverage floor, typechecks and builds the dashboard, scans public
+assets for configured secret values, verifies the foundation twice, proves full-batch replay
+idempotency, runs the frozen AI/safety gates, captures the scoped incident and model-disabled
+evidence, and validates two live provider-rehearsal artifacts for schema, completeness, provenance,
+and redaction. `make release-gate-automated` runs the repository-controlled portion before the
+human provider rehearsals. A backup recording is optional; `make demo-recording-check` validates it
+when one is produced.
 
 ## August 26: synthetic merchant simulator
 
@@ -497,7 +533,8 @@ in `preview_only` mode and are never retained in plaintext.
 
 Checkout telemetry accepts only the four frozen event types, binds every request to the signed
 session token, deduplicates by browser event ID, and enforces both rolling Redis limits and a
-database cap. A dismissal schedules a 30-second Celery re-check. The worker re-reads later browser
+database cap. A dismissal schedules a configurable server-side re-check (seven seconds in the
+public demo). The worker re-reads later browser
 events and Razorpay payment state before creating one treatment-only `CHECKOUT_ABANDON` case. A
 15-second Beat scan rescues a persisted dismissal if the immediate broker handoff fails.
 
@@ -559,6 +596,7 @@ The tests demonstrate:
 
 - `POST /demo/sessions` — fixed Razorpay test order and signed Checkout session bootstrap
 - `POST /demo/sessions/{session_id}/checkout-events` — bounded, idempotent browser telemetry
+- `POST /demo/sessions/{session_id}/payments/verify` — token-bound Checkout HMAC and captured-payment API verification
 - `GET /demo/sessions/{session_id}` — sanitized live case, action, provider, timeline, and metrics projection
 - `GET /demo/sessions/{session_id}/acceptance.json` — token-protected sanitized release evidence and acceptance checks
 - `GET /recover/{signed_token}` — verified bootstrap for the original unpaid Razorpay order

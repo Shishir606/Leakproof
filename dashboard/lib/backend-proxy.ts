@@ -18,6 +18,8 @@ export async function proxyBackend(
 
   const sessionToken = request.headers.get("x-leakproof-session-token");
   if (sessionToken) headers.set("x-leakproof-session-token", sessionToken);
+  const recoveryToken = request.headers.get("x-leakproof-recovery-token");
+  if (recoveryToken) headers.set("x-leakproof-recovery-token", recoveryToken);
   const forwardedFor = request.headers.get("x-forwarded-for");
   if (forwardedFor) headers.set("x-forwarded-for", forwardedFor);
 

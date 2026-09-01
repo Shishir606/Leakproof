@@ -127,6 +127,19 @@ class CheckoutEventReceipt(StrictContract):
     event_id: int
 
 
+class CheckoutPaymentVerificationRequest(StrictContract):
+    razorpay_payment_id: str = Field(min_length=5, max_length=128, pattern=r"^pay_[A-Za-z0-9_]+$")
+    razorpay_order_id: str = Field(min_length=7, max_length=128, pattern=r"^order_[A-Za-z0-9_]+$")
+    razorpay_signature: str = Field(min_length=64, max_length=64, pattern=r"^[a-fA-F0-9]{64}$")
+
+
+class CheckoutPaymentVerificationReceipt(StrictContract):
+    verified: Literal[True] = True
+    duplicate: bool
+    state: Literal[DemoSessionState.RECOVERED] = DemoSessionState.RECOVERED
+    payment_status: Literal["captured"] = "captured"
+
+
 class RecoveryBootstrap(StrictContract):
     session_id: str
     razorpay_key_id: str
