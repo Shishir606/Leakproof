@@ -267,6 +267,7 @@ class SubscriptionProjection(StrictContract):
     retry_owner: Literal["razorpay"] = "razorpay"
     retry_count: int = Field(default=0, ge=0)
     method_update_available: bool = False
+    authorization_repaired: bool = False
     disposition: Literal[
         "authorization_required",
         "provider_retry",
@@ -467,8 +468,11 @@ SCENARIO_CAPABILITIES = (
         scenario_type=LeakType.MANDATE_BROKEN,
         primary_entity_type="subscription",
         enabled=False,
-        capability_evidence=DataProvenance.ARCHITECTURE_READY,
-        reason="Qualified mandate detection and re-authorization are not implemented.",
+        capability_evidence=DataProvenance.CONTRACT_VERIFIED,
+        reason=(
+            "Contract-tested eMandate evidence and repair reconciliation are implemented; "
+            "live launch remains disabled until the test account proves the exact evidence."
+        ),
     ),
 )
 

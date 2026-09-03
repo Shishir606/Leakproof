@@ -6,7 +6,7 @@
 
 - id: T1_INSTRUMENT_DEAD
   match:
-    error_reason: [card_expired, token_expired, card_blocked, invalid_card, mandate_expired, mandate_revoked]
+    error_reason: [card_expired, token_expired, card_blocked, invalid_card, mandate_expired, mandate_revoked, mandate_not_active]
   class: INSTRUMENT_DEAD
   confidence: 0.95
   retry_allowed: false

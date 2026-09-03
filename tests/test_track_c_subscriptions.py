@@ -18,7 +18,16 @@ from leakproof.demo.service import (
 )
 from leakproof.demo.subscriptions import reconcile_subscription, subscription_view
 from leakproof.diagnosis import diagnose_case
-from leakproof.models.db import DemoSession, Event, ProviderObligation, RecoveryCase, Settlement
+from leakproof.models.db import (
+    Action,
+    Customer,
+    DemoSession,
+    Diagnosis,
+    Event,
+    ProviderObligation,
+    RecoveryCase,
+    Settlement,
+)
 from leakproof.providers import Invoice, Payment, ProviderError
 from leakproof.providers.fakes import (
     FakeCaseInsightProvider,
@@ -95,6 +104,41 @@ def capture_cycle(provider, invoice, *, payment_id, occurred=NOW + timedelta(min
         "captured",
         created_at=int(occurred.timestamp()),
         invoice_id=invoice.id,
+    )
+
+
+def mandate_failure_payload(demo, invoice, *, reason="mandate_not_active", method="emandate"):
+    return {
+        "event": "payment.failed",
+        "created_at": int(NOW.timestamp()),
+        "payload": {
+            "payment": {
+                "entity": {
+                    "id": "pay_mandate_failure",
+                    "subscription_id": demo.primary_entity_id,
+                    "invoice_id": invoice.id,
+                    "method": method,
+                    "recurring": True,
+                    "error_reason": reason,
+                }
+            },
+            "invoice": {
+                "entity": {"id": invoice.id, "subscription_id": demo.primary_entity_id}
+            },
+            "subscription": {"entity": {"id": demo.primary_entity_id}},
+        },
+    }
+
+
+def process_subscription_payload(session, provider, config, payload, event_id, now):
+    stored = persist_webhook(
+        session,
+        merchant_id=config.default_merchant_id,
+        payload=payload,
+        header_event_id=event_id,
+    )
+    return process_stored_webhook(
+        session, stored.id, provider=provider, settings=config, now=now
     )
 
 
@@ -394,3 +438,160 @@ def test_subscription_acceptance_capture_separates_service_and_invoice_recovery(
         assert checks["exact_invoice_settled"]
         assert checks["recovered_revenue_is_captured"]
         assert checks["no_app_owned_debit"]
+
+
+@pytest.mark.parametrize(
+    ("reason", "method"),
+    [
+        ("insufficient_funds", "emandate"),
+        ("payment_mandate_not_active", "emandate"),
+        ("mandate_not_active", "card"),
+        ("generic_decline", "emandate"),
+    ],
+)
+def test_mandate_false_classification_requires_exact_method_scoped_evidence(
+    session_factory, reason, method
+):
+    provider = FakePaymentProvider()
+    with session_factory() as session:
+        _, demo, config = setup_subscription(session, provider)
+        cycle = add_cycle(provider, demo)
+        set_subscription(provider, demo, "halted", method)
+        case_id = process_subscription_payload(
+            session,
+            provider,
+            config,
+            mandate_failure_payload(demo, cycle, reason=reason, method=method),
+            f"evt_false_{reason}_{method}",
+            NOW + timedelta(minutes=1),
+        )
+        assert session.get(RecoveryCase, case_id).leak_type == "SUBSCRIPTION_HALT"
+
+
+def test_stronger_mandate_evidence_reclassifies_existing_case_and_refreshes_diagnosis(
+    session_factory,
+):
+    provider = FakePaymentProvider()
+    with session_factory() as session:
+        _, demo, config = setup_subscription(session, provider)
+        cycle = add_cycle(provider, demo)
+        set_subscription(provider, demo, "halted", "emandate")
+        case = reconcile_subscription(
+            session, demo.id, provider=provider, settings=config, now=NOW + timedelta(minutes=1)
+        )
+        diagnose_case(session, case.id)
+        action = schedule_demo_recovery_email(session, case.id, settings=config, now=NOW)
+
+        case_id = process_subscription_payload(
+            session,
+            provider,
+            config,
+            mandate_failure_payload(demo, cycle),
+            "evt_qualified_mandate",
+            NOW + timedelta(minutes=2),
+        )
+        session.refresh(case)
+        session.refresh(action)
+        diagnosis = session.get(Diagnosis, case.id)
+        assert case_id == case.id
+        assert case.leak_type == "MANDATE_BROKEN"
+        assert diagnosis.failure_class == "INSTRUMENT_DEAD"
+        assert diagnosis.evidence["error_reason"] == "mandate_not_active"
+        assert action.status == "cancelled"
+        assert session.scalar(select(func.count(RecoveryCase.id))) == 1
+        assert session.scalar(select(func.count(Action.id))) == 1
+        assert session.scalar(select(func.count(Settlement.id))) == 0
+
+
+def test_duplicate_authorization_repair_is_non_monetary_then_verified_payment_recovers(
+    session_factory,
+):
+    provider = FakePaymentProvider()
+    with session_factory() as session:
+        _, demo, config = setup_subscription(session, provider)
+        cycle = add_cycle(provider, demo)
+        set_subscription(provider, demo, "halted", "emandate")
+        case_id = process_subscription_payload(
+            session,
+            provider,
+            config,
+            mandate_failure_payload(demo, cycle),
+            "evt_mandate_failure",
+            NOW + timedelta(minutes=1),
+        )
+        case = session.get(RecoveryCase, case_id)
+        set_subscription(provider, demo, "active", "emandate")
+        activated = {
+            "event": "subscription.activated",
+            "payload": {
+                "subscription": {"entity": {"id": demo.primary_entity_id}},
+                "invoice": {
+                    "entity": {"id": cycle.id, "subscription_id": demo.primary_entity_id}
+                },
+            },
+        }
+        for suffix in ("one", "two"):
+            process_subscription_payload(
+                session,
+                provider,
+                config,
+                activated,
+                f"evt_repair_{suffix}",
+                NOW + timedelta(minutes=2),
+            )
+        session.refresh(case)
+        view = subscription_view(session, demo, NOW + timedelta(minutes=2))
+        repair_events = list(
+            session.scalars(
+                select(Event).where(
+                    Event.case_id == case.id,
+                    Event.kind == "ENTITY_STATE",
+                )
+            )
+        )
+        assert view["authorization_repaired"] is True
+        assert sum(e.payload["state"] == "authorization_repaired" for e in repair_events) == 1
+        assert case.outcome != "RECOVERED"
+        assert session.scalar(select(func.count(Settlement.id))) == 0
+        assert view["outstanding_balance_paise"] == cycle.amount_due_paise
+
+        capture_cycle(provider, cycle, payment_id="pay_after_mandate_repair")
+        reconcile_subscription(
+            session,
+            demo.id,
+            provider=provider,
+            settings=config,
+            now=NOW + timedelta(minutes=10),
+        )
+        session.refresh(case)
+        assert case.outcome == "RECOVERED"
+        assert subscription_view(session, demo, NOW)["recovered_paise"] == cycle.amount_paise
+
+
+def test_mandate_repair_respects_customer_opt_out_and_intentional_cancellation(session_factory):
+    provider = FakePaymentProvider()
+    with session_factory() as session:
+        _, demo, config = setup_subscription(session, provider)
+        cycle = add_cycle(provider, demo)
+        set_subscription(provider, demo, "halted", "emandate")
+        case_id = process_subscription_payload(
+            session,
+            provider,
+            config,
+            mandate_failure_payload(demo, cycle),
+            "evt_optout_mandate",
+            NOW + timedelta(minutes=1),
+        )
+        customer = session.get(Customer, demo.customer_id)
+        customer.dnc = True
+        action = schedule_demo_recovery_email(session, case_id, settings=config, now=NOW)
+        set_subscription(provider, demo, "cancelled", "emandate")
+        reconcile_subscription(
+            session, demo.id, provider=provider, settings=config, now=NOW + timedelta(minutes=2)
+        )
+        session.refresh(action)
+        view = subscription_view(session, demo, NOW)
+        assert action.status == "cancelled"
+        assert view["method_update_available"] is False
+        assert view["authorization_repaired"] is False
+        assert session.scalar(select(func.count(Settlement.id))) == 0

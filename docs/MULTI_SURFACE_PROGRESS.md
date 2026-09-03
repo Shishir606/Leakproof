@@ -726,3 +726,48 @@ method repair and old-invoice settlement. If the account cannot manually collect
 capture active-with-arrears/merchant-review rather than claiming revenue recovery. No live provider
 call, human Checkout, recipient email, acceptance artifact, deployment, commit or push was performed
 in this code-completion step.
+
+## 2026-09-04 — Track D broken-mandate specialization
+
+**Supported contract implementation: complete. Automated verification: pass. Live launch: disabled.**
+
+Reused Track C's subscription reads, exact invoice-cycle ownership, one-case precedence, recovery
+token and customer-authorized method-update flow, action idempotency, opt-out checks, settlement
+ledger, and captured-payment reconciliation. No second contact pipeline, case, revenue attribution,
+retry, resume, debit, or reactivation path was added.
+
+- Added a strict contract for the one previously validated candidate shape: a signature-verified
+  `payment.failed` eMandate subsequent-payment event with exact
+  `error_reason=mandate_not_active`, `recurring=true`, and matching payment, subscription and invoice
+  relationships. The current provider subscription must also identify the method as `emandate`.
+  Insufficient funds, generic declines, `payment_mandate_not_active`, another method, malformed or
+  mismatched relationships, and pending/halted/cancelled state alone remain subscription evidence,
+  never broken-mandate evidence.
+- Qualified late evidence promotes the existing invoice-owned `SUBSCRIPTION_HALT` case to
+  `MANDATE_BROKEN`, cancels its pending obsolete actions, and refreshes an existing deterministic
+  diagnosis to the instrument-invalid class. Duplicate evidence reuses the same case and cannot
+  create another action or settlement.
+- A linked `subscription.activated` reconciliation after a qualified break records authorization
+  repair once as non-monetary entity state. It does not close the case, credit attribution, or clear
+  the affected invoice. Only a later captured payment reconciled to that exact invoice records money
+  and closes recovery.
+- Paused, cancelled, completed and expired subscriptions still suppress method update. Customer DNC
+  also suppresses the repair CTA and cancels pending contact. The application never reactivates a
+  subscription or initiates a debit.
+
+Automated coverage now includes false classification, stronger evidence arriving after diagnosis and
+planning, duplicate repair events, authorization success with the invoice still unpaid, subsequent
+verified payment, intentional cancellation, and customer opt-out. Shared resource, diagnosis,
+webhook, API-contract, dashboard, and migration suites also pass (provider-dependent tests skip when
+credentials are unavailable).
+
+### Precise remaining limitation
+
+The reviewed Razorpay test account has not produced a sanitized, reproducible event proving this
+exact eMandate reason and its Subscription invoice linkage, and no deterministic broken-mandate test
+control is documented. Therefore the interactive `MANDATE_BROKEN` scenario remains `enabled=false`.
+Its evidence label is `CONTRACT_VERIFIED`, not live-provider verified, and runtime promotion is
+limited to simulation/contract execution. Enabling live detection still requires an account capture,
+fixture validation against that capture, and a human re-authorization plus exact-invoice payment
+acceptance run; token-cancellation and expiry candidates remain unimplemented until equivalently
+scoped provider evidence exists.

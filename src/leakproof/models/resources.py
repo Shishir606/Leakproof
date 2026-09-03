@@ -128,6 +128,22 @@ class RiskSignal(SignalBase):
         return self
 
 
+class MandateInvalidEvidence(ResourceContract):
+    """Narrow contract for the only qualified evidence implemented by Track D.
+
+    This deliberately models an eMandate subsequent-payment failure, rather than
+    accepting provider descriptions or subscription lifecycle state as evidence.
+    """
+
+    evidence_type: Literal["emandate_subsequent_payment_failure"]
+    payment_id: str = Field(pattern=r"^pay_[A-Za-z0-9_]+$")
+    subscription_id: str = Field(pattern=r"^sub_[A-Za-z0-9_]+$")
+    invoice_id: str = Field(pattern=r"^inv_[A-Za-z0-9_]+$")
+    method: Literal["emandate"]
+    recurring: Literal[True]
+    error_reason: Literal["mandate_not_active"]
+
+
 class EntityStateSignal(SignalBase):
     kind: Literal["state"] = "state"
     state: Literal[

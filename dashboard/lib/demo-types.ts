@@ -140,6 +140,7 @@ export type SubscriptionProjection = {
   retry_owner: "razorpay";
   retry_count: number;
   method_update_available: boolean;
+  authorization_repaired: boolean;
   disposition: "authorization_required" | "provider_retry" | "method_update" | "active_with_arrears" | "merchant_review" | "paid";
   last_checked_at: string | null;
 };
