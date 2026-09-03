@@ -181,9 +181,11 @@ def get_demo_session_projection(
         raise DemoSessionExpired("demo session has expired")
 
     from leakproof.demo.invoices import invoice_view
+    from leakproof.demo.subscriptions import subscription_view
     from leakproof.provider_resources import case_for_session, order_recovery_supported
 
     invoice = invoice_view(session, demo, now)
+    subscription = subscription_view(session, demo, now)
     case = case_for_session(session, demo)
     diagnosis = session.get(Diagnosis, case.id) if case else None
     insight_record = session.get(CaseInsightRecord, case.id) if case else None
@@ -330,6 +332,8 @@ def get_demo_session_projection(
             order_recovery_supported(session, demo)
             or invoice is not None
             and invoice["disposition"] == "payable"
+            or subscription is not None
+            and subscription["method_update_available"]
         )
         and case is not None
     ) and DemoSessionState(demo.state) in {
@@ -353,9 +357,14 @@ def get_demo_session_projection(
             RecoveryActionProjection(
                 action_type=(
                     "merchant_review"
-                    if invoice and invoice["disposition"] == "merchant_review"
+                    if invoice
+                    and invoice["disposition"] == "merchant_review"
+                    or subscription
+                    and not subscription["method_update_available"]
                     else "invoice_payment_link"
                     if invoice
+                    else "subscription_method_update"
+                    if subscription
                     else "recovery_link"
                 ),
                 status=(
@@ -514,6 +523,7 @@ def get_demo_session_projection(
         provenance = DataProvenance.LIVE_TELEMETRY_PROVIDER_RECONCILED
     return DemoSessionProjection(
         invoice=invoice,
+        subscription=subscription,
         abandonment_check=abandonment,
         scenario_type=demo.scenario_type,
         primary_entity_type=demo.primary_entity_type,

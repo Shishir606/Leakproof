@@ -362,3 +362,23 @@ Source checks on 2026-09-03: Razorpay's [invoice creation contract](https://razo
 provides notification controls, partial payments and minimum future expiry; its
 [invoice states](https://razorpay.com/docs/payments/invoices/states/) prohibit customer payments
 on expired/cancelled invoices. These are documented capabilities, not account acceptance evidence.
+## Track C — pending and halted subscription recovery acceptance
+
+1. Configure one existing Razorpay Test Mode plan with
+   `LEAKPROOF_DEMO_SUBSCRIPTION_PLAN_ID`; do not create plans per rehearsal. Keep
+   `LEAKPROOF_SUBSCRIPTION_METHOD_ALLOWLIST=card` unless another method has separate account evidence.
+2. Start the Subscription halt rehearsal and complete its hosted authorization. Confirm setup stores
+   the subscription only; no case or revenue is claimed before an exact unpaid invoice is resolved.
+3. In Razorpay Dashboard, fail the same scheduled charge until the subscription moves pending then
+   halted. Confirm one case ID and one affected invoice remain stable while the observed retry count
+   changes. Leakproof must show Razorpay as retry owner and must not issue charge/retry/resume calls.
+4. Open the signed recovery action. Confirm it re-reads the subscription and exact invoice, then opens
+   Checkout with `subscription_id` and `subscription_card_change=true`. Complete the customer-authorized
+   card change. Activation may show active-with-arrears and must still report zero recovered revenue.
+5. Settle the exact old invoice only through an account-supported Razorpay path. Confirm its unique
+   captured payment(s) equal the invoice paid amount, the same case closes, and credited revenue never
+   exceeds the balance detected at risk. A later-cycle payment must not close the old case.
+6. Download the authenticated acceptance JSON and validate it with
+   `scripts/validate_acceptance_artifacts.py --require-live <file>`. Record method repair and invoice
+   collection as separate evidence. If arrears collection is unavailable, retain merchant review and
+   an incomplete artifact rather than overriding a blocking check.

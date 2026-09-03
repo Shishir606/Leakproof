@@ -33,7 +33,16 @@ def poll_invoice_aging() -> PollResult:
 
 
 def poll_subscription_health() -> PollResult:
-    return PollResult("subscription_health", scanned=0, signals=0)
+    from leakproof.config import get_settings
+    from leakproof.db import SessionLocal
+    from leakproof.demo.subscriptions import reconcile_subscription_sessions
+    from leakproof.providers.factory import get_payment_provider
+
+    return PollResult(
+        **reconcile_subscription_sessions(
+            session_factory=SessionLocal, provider=get_payment_provider(), settings=get_settings()
+        )
+    )
 
 
 def reconcile_provider_events() -> PollResult:

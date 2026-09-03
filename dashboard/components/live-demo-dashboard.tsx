@@ -11,6 +11,7 @@ import type {
 import { useSessionProjection } from "@/lib/use-session-projection";
 import { InvoiceStatus } from "@/components/invoice-status";
 import { AbandonmentStatus } from "@/components/abandonment-status";
+import { SubscriptionStatus } from "@/components/subscription-status";
 import { label, money, percent } from "@/lib/format";
 
 const SESSION_STORAGE_KEY = "leakproof:active-demo-session";
@@ -167,7 +168,7 @@ export function LiveDemoDashboard() {
       </header>
 
       {projection.invoice && <p className="live-warning">Evidence: {label(projection.data_provenance)}{projection.setup_state === "ACTION_REQUIRED" ? " · Provider setup or merchant review required." : ""}</p>}
-      {!expired && (projection.invoice ? <InvoiceStatus invoice={projection.invoice} /> : <AbandonmentStatus check={projection.abandonment_check} />)}
+      {!expired && (projection.subscription ? <SubscriptionStatus subscription={projection.subscription} /> : projection.invoice ? <InvoiceStatus invoice={projection.invoice} /> : <AbandonmentStatus check={projection.abandonment_check} />)}
 
       <div className="acceptance-capture">
         <button className="checkout-secondary" type="button" disabled={expired} onClick={async () => {

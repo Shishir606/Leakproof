@@ -256,8 +256,31 @@ class InvoiceProjection(StrictContract):
     partial_payment: bool
 
 
+class SubscriptionProjection(StrictContract):
+    provider_status: str
+    payment_method: str | None = None
+    cycle_resolved: bool
+    cycle_status: str | None = None
+    detected_balance_paise: int | None = None
+    outstanding_balance_paise: int = Field(default=0, ge=0)
+    recovered_paise: int = Field(default=0, ge=0)
+    retry_owner: Literal["razorpay"] = "razorpay"
+    retry_count: int = Field(default=0, ge=0)
+    method_update_available: bool = False
+    disposition: Literal[
+        "authorization_required",
+        "provider_retry",
+        "method_update",
+        "active_with_arrears",
+        "merchant_review",
+        "paid",
+    ]
+    last_checked_at: datetime | None = None
+
+
 class DemoSessionProjection(StrictContract):
     invoice: InvoiceProjection | None = None
+    subscription: SubscriptionProjection | None = None
     abandonment_check: AbandonmentCheck = Field(default_factory=AbandonmentCheck)
     scenario_type: LeakType = LeakType.PAYMENT_FAILURE
     primary_entity_type: Literal["order", "invoice", "subscription"] = "order"
@@ -285,13 +308,15 @@ class DemoSessionProjection(StrictContract):
 class AcceptanceSessionSummary(StrictContract):
     scenario_type: LeakType | None = None
     state: DemoSessionState
-    amount_paise: int = Field(gt=0)
+    amount_paise: int = Field(ge=0)
     currency: str = Field(pattern=r"^[A-Z]{3}$")
     email_mode: EmailMode
 
 
 class AcceptanceCaseSummary(StrictContract):
-    leak_type: Literal["PAYMENT_FAILURE", "CHECKOUT_ABANDON", "INVOICE_OVERDUE"]
+    leak_type: Literal[
+        "PAYMENT_FAILURE", "CHECKOUT_ABANDON", "INVOICE_OVERDUE", "SUBSCRIPTION_HALT"
+    ]
     state: str
     deterministic_diagnosis_ready: bool
     insight_status: Literal["pending", "succeeded", "fallback"]
@@ -317,6 +342,7 @@ class DemoAcceptanceExport(StrictContract):
     """Sanitized, credential-free evidence captured during the release rehearsal."""
 
     invoice: InvoiceProjection | None = None
+    subscription: SubscriptionProjection | None = None
     schema_version: Literal["2026-09-04"] = "2026-09-04"
     data_provenance: DataProvenance
     exported_at: datetime
@@ -387,6 +413,7 @@ class SubscriptionRecoveryBootstrap(StrictContract):
     razorpay_key_id: str
     subscription_id: str = Field(pattern=r"^sub_[A-Za-z0-9_]+$")
     subscription_card_change: Literal[True] = True
+    outstanding_invoice_id_present: bool = True
     expires_at: datetime
 
 
@@ -429,9 +456,12 @@ SCENARIO_CAPABILITIES = (
     ScenarioCapability(
         scenario_type=LeakType.SUBSCRIPTION_HALT,
         primary_entity_type="subscription",
-        enabled=False,
-        capability_evidence=DataProvenance.ARCHITECTURE_READY,
-        reason="Subscription provider lifecycle and method update are not implemented.",
+        enabled=True,
+        capability_evidence=DataProvenance.CONTRACT_VERIFIED,
+        reason=(
+            "Requires a configured reusable test plan and human Razorpay "
+            "authorization/failure controls."
+        ),
     ),
     ScenarioCapability(
         scenario_type=LeakType.MANDATE_BROKEN,
@@ -467,6 +497,7 @@ class SubscriptionSessionCreated(StrictContract):
     currency: str = Field(pattern=r"^[A-Z]{3}$")
     expires_at: datetime
     email_mode: EmailMode
+    authorization_url: str | None = Field(default=None, pattern=r"^https://")
 
 
 ResourceSessionCreated = Annotated[

@@ -268,6 +268,12 @@ class RazorpayPaymentProvider:
                     if isinstance(payload.get("payment_method"), str)
                     else None
                 ),
+                short_url=payload.get("short_url"),
+                current_start=payload.get("current_start"),
+                current_end=payload.get("current_end"),
+                charge_at=payload.get("charge_at"),
+                paid_count=payload.get("paid_count", 0),
+                remaining_count=payload.get("remaining_count", 0),
             )
         except ValidationError as exc:
             raise self._decode_error(
@@ -413,6 +419,7 @@ class RazorpayPaymentProvider:
                     "plan_id": request.plan_id,
                     "total_count": request.total_count,
                     "customer_notify": False,
+                    "notes": request.notes,
                 },
             )
         )

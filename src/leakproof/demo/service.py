@@ -22,6 +22,8 @@ from leakproof.demo.contracts import (
     InvoiceRecoveryBootstrap,
     InvoiceSessionCreated,
     RecoveryBootstrap,
+    SubscriptionRecoveryBootstrap,
+    SubscriptionSessionCreated,
     assert_session_transition,
     live_case_dedupe_key,
 )
@@ -193,11 +195,12 @@ def create_demo_session(
     limiter: RateLimiter,
     settings: Settings,
     now: datetime | None = None,
-) -> DemoSessionCreated | InvoiceSessionCreated:
+) -> DemoSessionCreated | InvoiceSessionCreated | SubscriptionSessionCreated:
     if request.scenario_type not in {
         LeakType.PAYMENT_FAILURE,
         LeakType.CHECKOUT_ABANDON,
         LeakType.INVOICE_OVERDUE,
+        LeakType.SUBSCRIPTION_HALT,
     }:
         raise ValueError("scenario_not_implemented")
     now = _as_utc(now or datetime.now(UTC))
@@ -216,6 +219,12 @@ def create_demo_session(
         from leakproof.demo.invoices import create_invoice_session
 
         return create_invoice_session(
+            session, request, provider=provider, settings=settings, now=now
+        )
+    if request.scenario_type == LeakType.SUBSCRIPTION_HALT:
+        from leakproof.demo.subscriptions import create_subscription_session
+
+        return create_subscription_session(
             session, request, provider=provider, settings=settings, now=now
         )
 
@@ -361,6 +370,10 @@ def issue_demo_recovery_token(
         from leakproof.demo.invoices import invoice_recovery_token
 
         return invoice_recovery_token(demo, settings=settings, now=now)
+    if demo.primary_entity_type == "subscription":
+        from leakproof.demo.subscriptions import subscription_recovery_token
+
+        return subscription_recovery_token(demo, settings=settings, now=now)
     if not order_recovery_supported(session, demo):
         raise RecoveryOrderNotAvailable("this recovery surface is not implemented")
     return issue_recovery_token(
@@ -382,7 +395,7 @@ def get_recovery_bootstrap(
     provider: PaymentProvider,
     settings: Settings,
     now: datetime | None = None,
-) -> RecoveryBootstrap | InvoiceRecoveryBootstrap:
+) -> RecoveryBootstrap | InvoiceRecoveryBootstrap | SubscriptionRecoveryBootstrap:
     """Verify all token bindings and re-read payment truth before reopening Checkout."""
     now = _as_utc(now or datetime.now(UTC))
     try:
@@ -400,6 +413,12 @@ def get_recovery_bootstrap(
         from leakproof.demo.invoices import invoice_bootstrap
 
         return invoice_bootstrap(session, claims, provider=provider, settings=settings, now=now)
+    if claims.purpose == RecoveryPurpose.SUBSCRIPTION_METHOD_UPDATE:
+        from leakproof.demo.subscriptions import subscription_bootstrap
+
+        return subscription_bootstrap(
+            session, claims, provider=provider, settings=settings, now=now
+        )
     if claims.purpose != RecoveryPurpose.ORDER_CHECKOUT:
         raise RecoveryTokenInvalid("invalid recovery token purpose")
 
@@ -857,16 +876,22 @@ def materialize_checkout_abandonment(
             for payment in payments
         ):
             raise ProviderError(
-                provider="razorpay", operation="list_order_payments",
-                error_class="response_mismatch", retryable=False,
+                provider="razorpay",
+                operation="list_order_payments",
+                error_class="response_mismatch",
+                retryable=False,
                 message="Razorpay payment state did not match the demo order",
             )
     except ProviderError as exc:
         _record_provider_call(
-            session, session_id=demo.id, provider="razorpay",
-            operation="list_order_payments", request_id=exc.request_id,
+            session,
+            session_id=demo.id,
+            provider="razorpay",
+            operation="list_order_payments",
+            request_id=exc.request_id,
             latency_ms=round((time.perf_counter() - started) * 1000),
-            status="failed", metadata={"dismissal_event_id": dismissal.id},
+            status="failed",
+            metadata={"dismissal_event_id": dismissal.id},
             error_class=exc.error_class,
         )
         session.commit()
@@ -874,9 +899,13 @@ def materialize_checkout_abandonment(
     pending = any(payment.status not in {"captured", "failed"} for payment in payments)
     captured = next((payment for payment in payments if payment.status == "captured"), None)
     _record_provider_call(
-        session, session_id=demo.id, provider="razorpay", operation="list_order_payments",
+        session,
+        session_id=demo.id,
+        provider="razorpay",
+        operation="list_order_payments",
         request_id=next((item.request_id for item in payments if item.request_id), None),
-        latency_ms=round((time.perf_counter() - started) * 1000), status="succeeded",
+        latency_ms=round((time.perf_counter() - started) * 1000),
+        status="succeeded",
         metadata={
             "dismissal_event_id": dismissal.id,
             "payment_count": len(payments),
@@ -961,9 +990,12 @@ def reconcile_demo_capture(session: Session, demo: DemoSession, payment, now: da
     record_paid_signal(
         session,
         PaidSignal(
-            merchant_id=demo.merchant_id, customer_id=demo.customer_id,
-            entity_id=payment.id, entity_root_id=demo.razorpay_order_id,
-            amount_paise=payment.amount_paise, currency=payment.currency,
+            merchant_id=demo.merchant_id,
+            customer_id=demo.customer_id,
+            entity_id=payment.id,
+            entity_root_id=demo.razorpay_order_id,
+            amount_paise=payment.amount_paise,
+            currency=payment.currency,
             evidence={"source": "razorpay_payment_api", "payment_status": "captured"},
             occurred_at=now,
         ),
@@ -974,8 +1006,10 @@ def reconcile_demo_capture(session: Session, demo: DemoSession, payment, now: da
 
 def latest_checkout_event(session: Session, session_id: str) -> CheckoutEvent | None:
     return session.scalar(
-        select(CheckoutEvent).where(CheckoutEvent.session_id == session_id)
-        .order_by(CheckoutEvent.id.desc()).limit(1)
+        select(CheckoutEvent)
+        .where(CheckoutEvent.session_id == session_id)
+        .order_by(CheckoutEvent.id.desc())
+        .limit(1)
     )
 
 
@@ -998,27 +1032,34 @@ def due_abandonment_checks(
             dismissal.received_at <= cutoff,
             DemoSession.state.in_(["CREATED", "CHECKOUT_OPEN", "AT_RISK"]),
             DemoSession.expires_at > now,
-            ~select(later.id).where(
-                later.session_id == dismissal.session_id, later.id > dismissal.id,
-            ).exists(),
-            ~select(ProviderCall.id).where(
+            ~select(later.id)
+            .where(
+                later.session_id == dismissal.session_id,
+                later.id > dismissal.id,
+            )
+            .exists(),
+            ~select(ProviderCall.id)
+            .where(
                 ProviderCall.session_id == dismissal.session_id,
                 ProviderCall.operation == "list_order_payments",
                 ProviderCall.status == "succeeded",
                 ProviderCall.safe_response_metadata["dismissal_event_id"].as_integer()
                 == dismissal.id,
                 ProviderCall.safe_response_metadata["check_resolved"].as_boolean().is_(True),
-            ).exists(),
-            ~select(RecoveryCase.id).where(
+            )
+            .exists(),
+            ~select(RecoveryCase.id)
+            .where(
                 RecoveryCase.merchant_id == DemoSession.merchant_id,
                 or_(
-                    RecoveryCase.dedupe_key == "live:" + DemoSession.id + ":"
-                    + DemoSession.razorpay_order_id,
-                    RecoveryCase.dedupe_key == "pf:" + DemoSession.customer_id + ":"
-                    + DemoSession.razorpay_order_id,
+                    RecoveryCase.dedupe_key
+                    == "live:" + DemoSession.id + ":" + DemoSession.razorpay_order_id,
+                    RecoveryCase.dedupe_key
+                    == "pf:" + DemoSession.customer_id + ":" + DemoSession.razorpay_order_id,
                 ),
                 RecoveryCase.leak_type == "PAYMENT_FAILURE",
-            ).exists(),
+            )
+            .exists(),
         )
         .order_by(dismissal.received_at, dismissal.id)
         .limit(limit)

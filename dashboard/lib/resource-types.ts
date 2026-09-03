@@ -130,4 +130,5 @@ export type ResourceSessionCreated = ResourceSessionBase & ({
   primary_entity_type: "subscription";
   scenario_type: "SUBSCRIPTION_HALT" | "MANDATE_BROKEN";
   primary_entity_id: string;
+  authorization_url: string | null;
 });

@@ -124,6 +124,28 @@ def validate_file(path: Path, *, require_live: bool) -> DemoAcceptanceExport:
             }
         if artifact.case is None or artifact.case.leak_type != "INVOICE_OVERDUE":
             errors.append("invoice evidence requires an invoice-overdue case")
+    if artifact.session.scenario_type == "SUBSCRIPTION_HALT":
+        required = {
+            "case_detected",
+            "pending_to_halted_same_case",
+            "razorpay_owns_retries",
+            "no_app_owned_debit",
+            "method_update_rechecked",
+            "cycle_payment_ledger_unique",
+            "audit_projection_replay_matches",
+            "no_blocking_provider_failure",
+            "intentional_states_have_no_cta",
+        }
+        if artifact.session.state == "RECOVERED":
+            required |= {
+                "exact_invoice_settled",
+                "same_case_closed",
+                "recovered_revenue_is_captured",
+            }
+        else:
+            required.add("activation_not_counted_as_revenue")
+        if artifact.case is None or artifact.case.leak_type != "SUBSCRIPTION_HALT":
+            errors.append("subscription evidence requires a subscription-halt case")
     if artifact.data_provenance == DataProvenance.LIVE_TELEMETRY_PROVIDER_RECONCILED:
         required |= ABANDONMENT_CHECKS
         if artifact.case is None or artifact.case.leak_type != "CHECKOUT_ABANDON":

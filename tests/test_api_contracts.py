@@ -327,7 +327,13 @@ def test_resource_adapters_reuse_transport_and_strip_unneeded_provider_fields():
                 "id": "sub_contract",
                 "plan_id": "plan_contract",
                 "status": "halted",
-                "paid_count": 9,
+                "short_url": "https://rzp.io/i/subscription-contract",
+                "payment_method": "card",
+                "current_start": 10,
+                "current_end": 20,
+                "charge_at": 21,
+                "paid_count": 2,
+                "remaining_count": 4,
                 "customer_email": "never-copy@example.invalid",
             }
         else:
@@ -347,7 +353,9 @@ def test_resource_adapters_reuse_transport_and_strip_unneeded_provider_fields():
     )
     assert isinstance(provider, InvoiceProvider) and isinstance(provider, SubscriptionProvider)
     assert provider.fetch_invoice("inv_contract").amount_due_paise == 80
-    assert provider.fetch_subscription("sub_contract").affected_invoice_id is None
+    subscription = provider.fetch_subscription("sub_contract")
+    assert subscription.affected_invoice_id is None
+    assert subscription.payment_method == "card" and subscription.paid_count == 2
     assert len(provider.list_subscription_invoices("sub_contract")) == 1
     assert provider.list_subscriptions()[0].status == "halted"
     assert "customer_email" not in provider.fetch_subscription("sub_contract").model_dump()

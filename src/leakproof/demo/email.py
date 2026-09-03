@@ -58,7 +58,10 @@ def _demo_for_case(session: Session, case: RecoveryCase) -> DemoSession | None:
     for demo in session.scalars(
         select(DemoSession).where(DemoSession.merchant_id == case.merchant_id)
     ):
-        if order_recovery_supported(session, demo) or demo.primary_entity_type == "invoice":
+        if order_recovery_supported(session, demo) or demo.primary_entity_type in {
+            "invoice",
+            "subscription",
+        }:
             owner = case_for_session(session, demo)
             if owner is not None and owner.id == case.id:
                 return demo
@@ -253,6 +256,7 @@ def execute_demo_recovery_email(
         return EmailExecutionResult(action.id, "cancelled")
 
     invoice = None
+    subscription = None
     if demo.primary_entity_type == "invoice":
         from leakproof.demo.invoices import invoice_view, reconcile_invoice
         from leakproof.providers.factory import get_payment_provider
@@ -270,6 +274,26 @@ def execute_demo_recovery_email(
             return EmailExecutionResult(action.id, "provider_retry")
         invoice = invoice_view(session, demo, attempted_at)
         if invoice["disposition"] != "payable" or case.outcome == "RECOVERED":
+            action.status = "cancelled"
+            session.commit()
+            return EmailExecutionResult(action.id, "cancelled")
+    elif demo.primary_entity_type == "subscription":
+        from leakproof.demo.subscriptions import reconcile_subscription, subscription_view
+        from leakproof.providers.factory import get_payment_provider
+
+        try:
+            reconcile_subscription(
+                session,
+                demo.id,
+                provider=invoice_provider or get_payment_provider(),
+                settings=settings,
+                now=attempted_at,
+                commit=False,
+            )
+        except ProviderError:
+            return EmailExecutionResult(action.id, "provider_retry")
+        subscription = subscription_view(session, demo, attempted_at)
+        if not subscription["method_update_available"] or case.outcome == "RECOVERED":
             action.status = "cancelled"
             session.commit()
             return EmailExecutionResult(action.id, "cancelled")
@@ -340,8 +364,20 @@ def execute_demo_recovery_email(
 
     token = issue_demo_recovery_token(session, demo.id, settings=settings, now=attempted_at)
     recovery_url = f"{settings.public_base_url.rstrip('/')}/recover/{quote(token, safe='')}"
-    template_id = "util_invoice_recovery_email_v1" if invoice else RECOVERY_EMAIL_TEMPLATE_ID
-    amount = invoice["outstanding_balance_paise"] if invoice else case.amount_at_risk
+    template_id = (
+        "util_invoice_recovery_email_v1"
+        if invoice
+        else "util_subscription_recovery_email_v1"
+        if subscription
+        else RECOVERY_EMAIL_TEMPLATE_ID
+    )
+    amount = (
+        invoice["outstanding_balance_paise"]
+        if invoice
+        else subscription["outstanding_balance_paise"]
+        if subscription
+        else case.amount_at_risk
+    )
     message = TemplateRegistry().render(
         template_id,
         {
@@ -363,6 +399,8 @@ def execute_demo_recovery_email(
                 template_variables={
                     "subject": "Your invoice has an outstanding balance"
                     if invoice
+                    else "Update your subscription payment method"
+                    if subscription
                     else RECOVERY_EMAIL_SUBJECT,
                     "body": message.body,
                     "recovery_url": recovery_url,

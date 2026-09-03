@@ -6,8 +6,8 @@ export type CheckoutEventType =
   | "checkout_dismissed"
   | "checkout_completed";
 
-export type DemoSession = Exclude<ResourceSessionCreated, { primary_entity_type: "subscription" }>;
-export type RecoveryBootstrap = Exclude<ResourceRecoveryBootstrap, { purpose: "subscription_method_update" }>;
+export type DemoSession = ResourceSessionCreated;
+export type RecoveryBootstrap = ResourceRecoveryBootstrap;
 
 export type InvoiceProjection = {
   provider_status: string;
@@ -88,6 +88,7 @@ export type AbandonmentCheck = {
 
 export type DemoSessionProjection = {
   invoice: InvoiceProjection | null;
+  subscription: SubscriptionProjection | null;
   abandonment_check: AbandonmentCheck;
   scenario_type: LeakType;
   primary_entity_type: "order" | "invoice" | "subscription";
@@ -126,6 +127,21 @@ export type DemoSessionProjection = {
     provider_failures: number;
     luna_cost_paise: number;
   };
+};
+
+export type SubscriptionProjection = {
+  provider_status: string;
+  payment_method: string | null;
+  cycle_resolved: boolean;
+  cycle_status: string | null;
+  detected_balance_paise: number | null;
+  outstanding_balance_paise: number;
+  recovered_paise: number;
+  retry_owner: "razorpay";
+  retry_count: number;
+  method_update_available: boolean;
+  disposition: "authorization_required" | "provider_retry" | "method_update" | "active_with_arrears" | "merchant_review" | "paid";
+  last_checked_at: string | null;
 };
 
 export type CheckoutEvent = {
@@ -185,6 +201,16 @@ export type RazorpayOptions = {
   theme: { color: string; backdrop_color: string };
 };
 
+export type RazorpaySubscriptionUpdateOptions = {
+  key: string;
+  subscription_id: string;
+  subscription_card_change: true;
+  name: string;
+  description: string;
+  handler: () => void;
+  modal: { confirm_close: boolean; escape: boolean; ondismiss: () => void };
+};
+
 export interface RazorpayCheckout {
   open(): void;
   on(event: "payment.submit", callback: () => void): void;
@@ -193,6 +219,6 @@ export interface RazorpayCheckout {
 
 declare global {
   interface Window {
-    Razorpay?: new (options: RazorpayOptions) => RazorpayCheckout;
+    Razorpay?: new (options: RazorpayOptions | RazorpaySubscriptionUpdateOptions) => RazorpayCheckout;
   }
 }

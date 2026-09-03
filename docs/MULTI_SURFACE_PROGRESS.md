@@ -677,3 +677,52 @@ Exact setup, payment and capture steps are in the
 [Track B runbook](API_RELEASE_RUNBOOK.md#track-b--invoice-recovery-acceptance).
 Test Mode provider writes created the dedicated customer plus draft/issued rehearsal invoices. No
 commit, push, public deployment, manual payment or recipient email was performed.
+
+## 2026-09-04 — Track C pending and halted subscription recovery
+
+**Code implementation: complete. Automated verification: pass. Provider acceptance: pending.**
+
+Reused the shared typed Razorpay transport, provider entity/obligation/settlement tables, immutable
+case timeline, same-obligation precedence, v2 recovery tokens, deterministic diagnosis, model
+fallback, email allowlist/preview controls, authenticated projection, and generic acceptance download.
+No second case, ledger, webhook inbox, email pipeline, or automatic-debit path was added.
+
+- Added environment configuration for one reusable test plan, bounded subscription count and poll
+  cadence, plus an explicit payment-method allowlist. Simulation uses one stable fake plan; live
+  setup refuses to create a subscription until a test plan ID is configured. Plans are never created
+  per demo run and provider notifications remain disabled.
+- Extended the typed subscription adapter with the hosted authorization link, lifecycle timing,
+  payment method and safe counters. These counters are stored for display only and never identify a
+  billing cycle or outstanding amount.
+- Added authorization/setup, current provider reads, exact invoice-cycle correlation, payment-ledger
+  verification, scheduled health polling and webhook wakeups. Pending and halted observations update
+  the same invoice-owned case. A paid old cycle can be followed by a new case for a later cycle.
+  Duplicate and delayed events converge on current API truth; mismatched subscription/invoice/payment
+  resources stop reconciliation.
+- Razorpay remains the sole owner of recurring retries. Leakproof exposes only documented,
+  customer-authorized card replacement for allowlisted methods and eligible pending/halted states.
+  Paused, cancelled, completed and expired subscriptions have no recovery CTA. No charge, retry,
+  resume, replacement order or manual arrears debit exists in the implementation.
+- Subscription activation and authorization repair are service facts. They do not close a case or
+  count revenue. Only captured payments whose order/invoice/currency/amount reconcile to the exact
+  affected invoice can receive credit and close that cycle. A future-cycle payment cannot settle an
+  older unpaid invoice; active-with-arrears is shown as merchant review.
+- Added subscription-specific optional email wording, minimal setup/recovery/dashboard UI, sanitized
+  acceptance checks and validator support. Acceptance explicitly proves pending-to-halted same-case
+  behavior, provider-owned retries, method-update recheck, exact-invoice settlement, captured revenue
+  and absence of app-owned debit.
+
+Automated coverage includes setup, same-cycle repeated failures, successful exact-invoice recovery,
+multiple cycles, future-cycle isolation, activation with arrears, delayed/duplicate/mismatched
+webhooks, intentional lifecycle states, method allowlisting, and provider/model/email failures.
+TypeScript contracts and UI compile. A local simulated acceptance export is contract evidence only.
+
+### Provider/manual verification still required
+
+Configure `LEAKPROOF_DEMO_SUBSCRIPTION_PLAN_ID` with one reviewed Razorpay Test Mode plan, authorize
+the created subscription, use Dashboard-controlled charges to move its exact invoice from pending to
+halted, then perform the documented card-change flow. Capture provider evidence separately for
+method repair and old-invoice settlement. If the account cannot manually collect halted arrears,
+capture active-with-arrears/merchant-review rather than claiming revenue recovery. No live provider
+call, human Checkout, recipient email, acceptance artifact, deployment, commit or push was performed
+in this code-completion step.

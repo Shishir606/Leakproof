@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     demo_invoice_due_seconds: int = Field(default=60, ge=1, le=86400)
     demo_invoice_expiry_minutes: int = Field(default=60, ge=16, le=1440)
     invoice_reconcile_seconds: int = Field(default=30, ge=5, le=300)
+    demo_subscription_plan_id: str = Field(default="", pattern=r"^(plan_[A-Za-z0-9_]+)?$")
+    demo_subscription_total_count: int = Field(default=6, ge=2, le=120)
+    subscription_reconcile_seconds: int = Field(default=30, ge=5, le=300)
+    subscription_method_allowlist: str = "card"
     demo_session_ttl_minutes: int = Field(default=30, ge=5, le=120)
     demo_sessions_per_ip_hour: int = Field(default=10, ge=1, le=100)
     demo_checkout_events_per_session: int = Field(default=100, ge=4, le=1_000)
@@ -68,6 +72,15 @@ class Settings(BaseSettings):
             if merchant_id.strip()
         )
         return configured or frozenset({self.default_merchant_id})
+
+    @property
+    def allowed_subscription_methods(self) -> frozenset[str]:
+        supported = {"card", "upi", "emandate"}
+        return frozenset(
+            method
+            for item in self.subscription_method_allowlist.split(",")
+            if (method := item.strip().casefold()) in supported
+        )
 
     @model_validator(mode="after")
     def validate_live_demo_readiness(self) -> Settings:

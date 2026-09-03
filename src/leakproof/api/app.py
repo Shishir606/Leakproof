@@ -26,11 +26,9 @@ from leakproof.demo import (
     CheckoutPaymentVerificationReceipt,
     CheckoutPaymentVerificationRequest,
     DemoAcceptanceExport,
-    DemoSessionCreated,
     DemoSessionCreateRequest,
     DemoSessionProjection,
     RazorpayWebhookEnvelope,
-    RecoveryBootstrap,
     ResendWebhookEnvelope,
     ResourceRecoveryBootstrap,
     ResourceSessionCreated,
@@ -457,12 +455,13 @@ def create_demo_session_route(
     session: SessionDep,
     provider: PaymentProviderDep,
     limiter: DemoRateLimiterDep,
-) -> DemoSessionCreated | JSONResponse:
+) -> ResourceSessionCreated | JSONResponse:
     settings = get_settings()
     if payload.scenario_type not in {
         LeakType.PAYMENT_FAILURE,
         LeakType.CHECKOUT_ABANDON,
         LeakType.INVOICE_OVERDUE,
+        LeakType.SUBSCRIPTION_HALT,
     }:
         return contract_error(409, "scenario_not_implemented", "This scenario is not available yet")
     if not settings.demo_sessions_enabled:
@@ -678,7 +677,7 @@ def recovery_route(
     signed_token: str,
     session: SessionDep,
     provider: PaymentProviderDep,
-) -> RecoveryBootstrap | JSONResponse:
+) -> ResourceRecoveryBootstrap | JSONResponse:
     try:
         return get_recovery_bootstrap(
             session,

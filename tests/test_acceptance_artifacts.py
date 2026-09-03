@@ -67,6 +67,55 @@ def test_acceptance_artifact_validator_accepts_complete_sanitized_live_evidence(
     assert artifact.case.leak_type == "CHECKOUT_ABANDON"
 
 
+def test_acceptance_validator_accepts_subscription_cycle_evidence(tmp_path):
+    payload = _artifact()
+    payload["session"]["scenario_type"] = "SUBSCRIPTION_HALT"
+    payload["case"]["leak_type"] = "SUBSCRIPTION_HALT"
+    required = {
+        "case_detected",
+        "pending_to_halted_same_case",
+        "razorpay_owns_retries",
+        "no_app_owned_debit",
+        "method_update_rechecked",
+        "cycle_payment_ledger_unique",
+        "audit_projection_replay_matches",
+        "no_blocking_provider_failure",
+        "intentional_states_have_no_cta",
+        "exact_invoice_settled",
+        "same_case_closed",
+        "recovered_revenue_is_captured",
+    }
+    payload["checks"] = [
+        {
+            "check": name,
+            "passed": True,
+            "severity": "blocking",
+            "detail": "Sanitized subscription evidence passed.",
+        }
+        for name in sorted(required)
+    ]
+    payload["subscription"] = {
+        "provider_status": "active",
+        "payment_method": "card",
+        "cycle_resolved": True,
+        "cycle_status": "paid",
+        "detected_balance_paise": 50000,
+        "outstanding_balance_paise": 0,
+        "recovered_paise": 50000,
+        "retry_owner": "razorpay",
+        "retry_count": 3,
+        "method_update_available": False,
+        "disposition": "paid",
+        "last_checked_at": "2026-09-04T12:00:00Z",
+    }
+    path = tmp_path / "subscription.json"
+    path.write_text(json.dumps(payload))
+
+    artifact = validator.validate_file(path, require_live=True)
+
+    assert artifact.passed and artifact.subscription.retry_owner == "razorpay"
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [

@@ -46,6 +46,8 @@ def build_demo_acceptance_export(
     demo = session.get(DemoSession, session_id)
     if demo.primary_entity_type == "invoice":
         return _invoice_acceptance(session, demo, projection, exported_at)
+    if demo.primary_entity_type == "subscription":
+        return _subscription_acceptance(session, demo, projection, exported_at)
     case_row = session.get(RecoveryCase, case.case_id) if case is not None else None
     recovery_action_registered = any(
         action.action_type == "recovery_link" for action in projection.recovery_actions
@@ -446,6 +448,171 @@ def _invoice_acceptance(session, demo, projection, exported_at):
         exported_at=exported_at,
         passed=all(c.passed for c in checks if c.severity == "blocking"),
         invoice=invoice,
+        session=AcceptanceSessionSummary(
+            scenario_type=demo.scenario_type,
+            state=projection.state,
+            amount_paise=demo.amount_paise,
+            currency=demo.currency,
+            email_mode=projection.email_mode,
+        ),
+        case=AcceptanceCaseSummary(
+            leak_type=case.leak_type,
+            state=case.state,
+            deterministic_diagnosis_ready=case.deterministic_diagnosis is not None,
+            insight_status=case.insight_status,
+        )
+        if case
+        else None,
+        operational_metrics=projection.metrics,
+        provider_statuses=[
+            AcceptanceProviderStatus(**p.model_dump(exclude={"request_id"}))
+            for p in projection.provider_statuses
+        ],
+        timeline=projection.timeline,
+        checks=checks,
+    )
+
+
+def _subscription_acceptance(session, demo, projection, exported_at):
+    from leakproof.models.db import Event, ProviderEntity, ProviderObligation, Settlement
+
+    parent = session.scalar(
+        select(ProviderEntity).where(
+            ProviderEntity.merchant_id == demo.merchant_id,
+            ProviderEntity.mode == demo.provider_mode,
+            ProviderEntity.entity_type == "subscription",
+            ProviderEntity.provider_entity_id == demo.primary_entity_id,
+        )
+    )
+    cycle_id = (parent.safe_metadata or {}).get("affected_invoice_id") if parent else None
+    obligation = (
+        session.scalar(
+            select(ProviderObligation).where(
+                ProviderObligation.merchant_id == demo.merchant_id,
+                ProviderObligation.mode == demo.provider_mode,
+                ProviderObligation.entity_type == "invoice",
+                ProviderObligation.provider_entity_id == cycle_id,
+            )
+        )
+        if cycle_id
+        else None
+    )
+    case = projection.case
+    events = list(
+        session.scalars(
+            select(Event).where(Event.case_id == (case.case_id if case else "__none__"))
+        )
+    )
+    settlements = list(
+        session.scalars(
+            select(Settlement).where(
+                Settlement.obligation_id == (obligation.id if obligation else "__none__")
+            )
+        )
+    )
+    latest = {p.operation: p for p in projection.provider_statuses if p.provider == "razorpay"}
+    subscription = projection.subscription
+    reconciliations = [e for e in events if e.kind == "SUBSCRIPTION_RECONCILED"]
+    statuses = [e.payload.get("subscription_status") for e in reconciliations]
+    checks = []
+
+    def check(name, passed, detail, severity="blocking"):
+        checks.append(
+            AcceptanceCheck(check=name, passed=bool(passed), severity=severity, detail=detail)
+        )
+
+    check(
+        "case_detected", case and obligation, "One exact subscription-invoice cycle owns the case."
+    )
+    check(
+        "pending_to_halted_same_case",
+        "pending" in statuses
+        and "halted" in statuses
+        and obligation
+        and obligation.case_id == case.case_id,
+        "Pending and halted observations escalated one cycle case.",
+    )
+    check(
+        "razorpay_owns_retries",
+        subscription and subscription.retry_owner == "razorpay",
+        "Recurring retries remain provider-owned.",
+    )
+    check(
+        "no_app_owned_debit",
+        all(
+            p.operation not in {"charge_subscription", "retry_subscription", "resume_subscription"}
+            for p in projection.provider_statuses
+        ),
+        "Leakproof issued no debit, retry, or resume operation.",
+    )
+    check(
+        "method_update_rechecked",
+        "recovery_subscription_check" in latest,
+        "The method-update route rechecked current provider state and exact arrears.",
+    )
+    check(
+        "cycle_payment_ledger_unique",
+        len({p.payment_id for p in settlements}) == len(settlements),
+        "Captured payments are unique within the exact invoice obligation.",
+    )
+    check(
+        "audit_projection_replay_matches",
+        case and replay_case(session, case.case_id).projection_matches,
+        "Append-only replay matches the stored case.",
+    )
+    check(
+        "no_blocking_provider_failure",
+        latest and all(p.status != "failed" for p in latest.values()),
+        "Latest provider setup and reconciliation calls succeeded.",
+    )
+    if projection.state == DemoSessionState.RECOVERED:
+        check(
+            "exact_invoice_settled",
+            subscription
+            and subscription.outstanding_balance_paise == 0
+            and obligation
+            and obligation.settled_at,
+            "The affected invoice—not activation alone—was fully settled.",
+        )
+        check(
+            "same_case_closed",
+            case and case.state == "CLOSED",
+            "Settlement closed the same billing-cycle case.",
+        )
+        check(
+            "recovered_revenue_is_captured",
+            obligation
+            and obligation.recovered_paise == obligation.detected_due_paise
+            and sum(p.credited_paise for p in settlements) == obligation.detected_due_paise,
+            "Recovered revenue is backed by captured payment identities.",
+        )
+    else:
+        check(
+            "activation_not_counted_as_revenue",
+            not subscription
+            or subscription.provider_status != "active"
+            or projection.metrics.recovered_amount_paise == 0,
+            "Service activation alone did not count recovered revenue.",
+        )
+    check(
+        "intentional_states_have_no_cta",
+        not subscription
+        or subscription.provider_status not in {"paused", "cancelled", "completed", "expired"}
+        or not projection.recovery_url_available,
+        "Intentional and terminal states cannot update or restart the subscription.",
+    )
+    check(
+        "optional_email_exercised",
+        any(a.action_type == "email_link" for a in projection.recovery_actions),
+        "Optional allowlisted email or preview was scheduled.",
+        "advisory",
+    )
+
+    return DemoAcceptanceExport(
+        data_provenance=projection.data_provenance,
+        exported_at=exported_at,
+        passed=all(c.passed for c in checks if c.severity == "blocking"),
+        subscription=subscription,
         session=AcceptanceSessionSummary(
             scenario_type=demo.scenario_type,
             state=projection.state,

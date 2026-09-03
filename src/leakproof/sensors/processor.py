@@ -193,8 +193,21 @@ def process_stored_webhook(
     try:
         from leakproof.config import get_settings
         from leakproof.demo.invoices import process_invoice_webhook
+        from leakproof.demo.subscriptions import process_subscription_webhook
         from leakproof.providers.factory import get_payment_provider
 
+        handled, subscription_case_id = process_subscription_webhook(
+            session,
+            event,
+            provider=provider or get_payment_provider(),
+            settings=settings or get_settings(),
+            now=now,
+        )
+        if handled:
+            event.processed_at = datetime.now(UTC)
+            event.last_error = None
+            session.commit()
+            return subscription_case_id
         handled, invoice_case_id = process_invoice_webhook(
             session,
             event,

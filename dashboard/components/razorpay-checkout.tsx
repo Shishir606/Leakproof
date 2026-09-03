@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useSessionProjection } from "@/lib/use-session-projection";
 import { InvoiceStatus } from "@/components/invoice-status";
 import { AbandonmentStatus } from "@/components/abandonment-status";
+import { SubscriptionStatus } from "@/components/subscription-status";
 import { deliverTelemetry, flushTelemetry } from "@/lib/checkout-telemetry";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -246,7 +247,7 @@ function OrderReceipt({ checkout, recovered }: { checkout: PublicCheckout; recov
 export function DemoCheckout() {
   const router = useRouter();
   const [recipient, setRecipient] = useState("");
-  const [scenario, setScenario] = useState<"CHECKOUT_ABANDON" | "PAYMENT_FAILURE" | "INVOICE_OVERDUE">("CHECKOUT_ABANDON");
+  const [scenario, setScenario] = useState<"CHECKOUT_ABANDON" | "PAYMENT_FAILURE" | "INVOICE_OVERDUE" | "SUBSCRIPTION_HALT">("CHECKOUT_ABANDON");
   const [session, setSession] = useState<DemoSession>();
   const [state, setState] = useState<CheckoutState>("idle");
   const [message, setMessage] = useState("A fixed ₹500 test order will be created on the server.");
@@ -260,8 +261,8 @@ export function DemoCheckout() {
       const active = JSON.parse(stored) as DemoSession;
       if (new Date(active.expires_at).getTime() > Date.now()) {
         setSession(active);
-        setScenario(active.scenario_type);
-        setMessage("Your unexpired test order is ready to resume.");
+        if (active.scenario_type !== "MANDATE_BROKEN") setScenario(active.scenario_type);
+        setMessage("Your unexpired test rehearsal is ready to resume.");
         if (active.primary_entity_type === "order") void flushTelemetry(active);
       } else {
         sessionStorage.removeItem(SESSION_STORAGE_KEY);
@@ -288,6 +289,11 @@ export function DemoCheckout() {
         setSession(active);
       }
       if (active.primary_entity_type === "invoice") { router.replace("/"); return; }
+      if (active.primary_entity_type === "subscription") {
+        if (active.authorization_url) window.location.assign(active.authorization_url);
+        else router.replace("/");
+        return;
+      }
       await Promise.all([loadCheckoutSdk(), flushTelemetry(active)]);
       openCheckout({
         checkout: active,
@@ -310,7 +316,7 @@ export function DemoCheckout() {
     <div className="checkout-card">
       <div className="checkout-card-copy">
         <span className="checkout-step">01 · Test the leak</span>
-        <h2>{scenario === "INVOICE_OVERDUE" ? "Recover an overdue test invoice." : "Open a real Razorpay test Checkout."}</h2>
+        <h2>{scenario === "INVOICE_OVERDUE" ? "Recover an overdue test invoice." : scenario === "SUBSCRIPTION_HALT" ? "Recover a pending or halted subscription." : "Open a real Razorpay test Checkout."}</h2>
         <p>Dismiss it, trigger a test failure, or complete it. Leakproof records bounded browser signals while server-verified Razorpay sandbox truth decides payment success.</p>
       </div>
       <fieldset className="checkout-scenarios" disabled={Boolean(session) && !expired}>
@@ -318,8 +324,9 @@ export function DemoCheckout() {
         <label><input type="radio" name="scenario" checked={scenario === "CHECKOUT_ABANDON"} onChange={() => setScenario("CHECKOUT_ABANDON")} /> Checkout abandonment</label>
         <label><input type="radio" name="scenario" checked={scenario === "PAYMENT_FAILURE"} onChange={() => setScenario("PAYMENT_FAILURE")} /> Payment failure</label>
         <label><input type="radio" name="scenario" checked={scenario === "INVOICE_OVERDUE"} onChange={() => setScenario("INVOICE_OVERDUE")} /> Overdue invoice</label>
+        <label><input type="radio" name="scenario" checked={scenario === "SUBSCRIPTION_HALT"} onChange={() => setScenario("SUBSCRIPTION_HALT")} /> Subscription halt</label>
       </fieldset>
-      <p>{scenario === "INVOICE_OVERDUE" ? "Create a test invoice with partial payments enabled. Wait for its business due date, then pay part and the remaining balance on the original hosted invoice." : scenario === "CHECKOUT_ABANDON" ? "Open Checkout, close it without paying, then watch the waiting and provider recheck below. Continue recovery once the original order is confirmed unpaid." : "Use a Razorpay test failure, then follow the recovery case. Provider-confirmed failure takes precedence over dismissal."}</p>
+      <p>{scenario === "SUBSCRIPTION_HALT" ? "Authorize a subscription on the configured reusable test plan. Razorpay owns recurring retries; Leakproof only correlates the exact unpaid cycle and offers a customer-authorized method update." : scenario === "INVOICE_OVERDUE" ? "Create a test invoice with partial payments enabled. Wait for its business due date, then pay part and the remaining balance on the original hosted invoice." : scenario === "CHECKOUT_ABANDON" ? "Open Checkout, close it without paying, then watch the waiting and provider recheck below. Continue recovery once the original order is confirmed unpaid." : "Use a Razorpay test failure, then follow the recovery case. Provider-confirmed failure takes precedence over dismissal."}</p>
       <label className="checkout-field">
         <span>Recovery email <small>optional</small></span>
         <input
@@ -334,13 +341,13 @@ export function DemoCheckout() {
       </label>
       {session?.primary_entity_type === "order" && <OrderReceipt checkout={session} />}
       <button className="checkout-primary" type="button" onClick={start} disabled={state === "preparing" || (!expired && (state === "open" || projection?.state === "RECOVERED" || Boolean(projection?.recovery_path)))}>
-        {state === "preparing" ? "Preparing secure Checkout…" : expired ? "Start a new rehearsal" : scenario === "INVOICE_OVERDUE" ? (session ? "View invoice" : "Create test invoice") : session ? "Resume Checkout" : scenario === "CHECKOUT_ABANDON" ? "Start checkout abandonment" : "Create test order & open Checkout"}
+        {state === "preparing" ? "Preparing secure Checkout…" : expired ? "Start a new rehearsal" : scenario === "SUBSCRIPTION_HALT" ? (session ? "View subscription" : "Create & authorize subscription") : scenario === "INVOICE_OVERDUE" ? (session ? "View invoice" : "Create test invoice") : session ? "Resume Checkout" : scenario === "CHECKOUT_ABANDON" ? "Start checkout abandonment" : "Create test order & open Checkout"}
         <span aria-hidden="true">→</span>
       </button>
       <CheckoutStatus state={state} message={message} />
       {expired && <p role="status">Session expired. Recovery is disabled; start a new rehearsal.</p>}
       {!expired && projectionError && <p role="status">Status delayed: {projectionError}</p>}
-      {!expired && projection && (projection.invoice ? <InvoiceStatus invoice={projection.invoice} /> : <AbandonmentStatus check={projection.abandonment_check} />)}
+      {!expired && projection && (projection.subscription ? <SubscriptionStatus subscription={projection.subscription} /> : projection.invoice ? <InvoiceStatus invoice={projection.invoice} /> : <AbandonmentStatus check={projection.abandonment_check} />)}
       {!expired && projection?.recovery_path && <Link className="checkout-primary" href={projection.recovery_path}>Continue recovery →</Link>}
       {session && <Link className="checkout-secondary" href="/">Watch the live dashboard →</Link>}
 
@@ -368,10 +375,10 @@ export function RecoveryCheckout({ token }: { token: string }) {
     setState("preparing");
     try {
       const recovery = await getRecoveryBootstrap(token);
-      if (recovery.purpose === "order_checkout") await loadCheckoutSdk();
+      if (recovery.purpose !== "invoice_hosted_payment") await loadCheckoutSdk();
       setBootstrap(recovery);
       setState("idle");
-      setMessage(recovery.purpose === "invoice_hosted_payment" ? invoiceMessage(recovery.disposition) : "Verified and unpaid. Continue with the exact order that was originally created.");
+      setMessage(recovery.purpose === "invoice_hosted_payment" ? invoiceMessage(recovery.disposition) : recovery.purpose === "subscription_method_update" ? "Current arrears and subscription state verified. Continue to replace the card; Razorpay owns any later retry." : "Verified and unpaid. Continue with the exact order that was originally created.");
     } catch (error) {
       setState("failed");
       setMessage(errorMessage(error));
@@ -396,6 +403,26 @@ export function RecoveryCheckout({ token }: { token: string }) {
         setMessage(invoiceMessage(fresh.disposition));
         setState("idle");
         if (fresh.disposition === "payable" && fresh.redirect_url) window.location.assign(fresh.redirect_url);
+        return;
+      }
+      if (fresh.purpose === "subscription_method_update") {
+        if (!window.Razorpay) throw new Error("Razorpay Checkout is not available.");
+        const instance = new window.Razorpay({
+          key: fresh.razorpay_key_id,
+          subscription_id: fresh.subscription_id,
+          subscription_card_change: true,
+          name: "Leakproof test store",
+          description: "Update subscription payment method",
+          handler: () => {
+            setState("completed");
+            setMessage("Payment method submitted. Revenue remains unrecovered until Razorpay reports the exact invoice paid.");
+            router.replace("/");
+          },
+          modal: { confirm_close: true, escape: true, ondismiss: () => { setState("idle"); setMessage("Method update closed. No debit was initiated by Leakproof."); } },
+        });
+        instance.open();
+        setState("open");
+        setMessage("Razorpay method update opened. Leakproof does not initiate a recurring debit.");
         return;
       }
       let active: DemoSession | undefined;
@@ -431,8 +458,9 @@ export function RecoveryCheckout({ token }: { token: string }) {
       </div>
       {bootstrap?.purpose === "order_checkout" && <OrderReceipt checkout={bootstrap} recovered />}
       {bootstrap?.purpose === "invoice_hosted_payment" && <p>Current outstanding: <strong>{money(bootstrap.amount_due_paise, bootstrap.currency)}</strong></p>}
+      {bootstrap?.purpose === "subscription_method_update" && <p>Update the subscription card. This repairs authorization; it does not prove an older invoice was collected.</p>}
       {!(bootstrap?.purpose === "invoice_hosted_payment" && bootstrap.disposition !== "payable") && <button className="checkout-primary" type="button" onClick={reopen} disabled={!bootstrap || state === "preparing" || state === "open" || (bootstrap.purpose === "invoice_hosted_payment" && bootstrap.disposition !== "payable")}>
-        {state === "preparing" ? "Verifying payment state…" : bootstrap?.purpose === "invoice_hosted_payment" ? "Continue original invoice" : "Continue original order"}
+        {state === "preparing" ? "Verifying payment state…" : bootstrap?.purpose === "invoice_hosted_payment" ? "Continue original invoice" : bootstrap?.purpose === "subscription_method_update" ? "Update payment method" : "Continue original order"}
         <span aria-hidden="true">→</span>
       </button>}
       {state === "failed" && !bootstrap && (

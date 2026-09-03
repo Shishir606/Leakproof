@@ -188,6 +188,12 @@ class Subscription(ResourceContract):
     ]
     plan_id: str = Field(pattern=r"^plan_[A-Za-z0-9_]+$")
     payment_method: Literal["card", "upi", "emandate"] | None = None
+    short_url: str | None = Field(default=None, pattern=r"^https://")
+    current_start: int | None = Field(default=None, ge=0, strict=True)
+    current_end: int | None = Field(default=None, ge=0, strict=True)
+    charge_at: int | None = Field(default=None, ge=0, strict=True)
+    paid_count: int = Field(default=0, ge=0, strict=True)
+    remaining_count: int = Field(default=0, ge=0, strict=True)
     # An explicit invoice identifies the affected cycle, never paid_count.
     affected_invoice_id: str | None = Field(default=None, pattern=r"^inv_[A-Za-z0-9_]+$")
 
@@ -214,6 +220,7 @@ class CreateSubscriptionRequest(ResourceContract):
     plan_id: str = Field(pattern=r"^plan_[A-Za-z0-9_]+$")
     total_count: int = Field(gt=0)
     customer_notify: Literal[False] = False
+    notes: dict[str, str] = Field(default_factory=dict)
 
 
 @runtime_checkable

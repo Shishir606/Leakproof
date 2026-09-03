@@ -8,17 +8,21 @@ from leakproof.providers.contracts import (
     CaseInsightResult,
     CreateInvoiceRequest,
     CreateOrderRequest,
+    CreateSubscriptionRequest,
     EmailSendRequest,
     EmailSendResult,
     Invoice,
     Payment,
     PaymentOrder,
     ProviderError,
+    Subscription,
 )
 
 
 @dataclass
 class FakePaymentProvider:
+    subscriptions: dict[str, Subscription] = field(default_factory=dict)
+    subscription_create_calls: list[CreateSubscriptionRequest] = field(default_factory=list)
     invoices: dict[str, Invoice] = field(default_factory=dict)
     invoice_create_calls: list[CreateInvoiceRequest] = field(default_factory=list)
     invoice_issue_calls: list[str] = field(default_factory=list)
@@ -83,6 +87,38 @@ class FakePaymentProvider:
             for i in self.invoices.values()
             if subscription_id is None or i.subscription_id == subscription_id
         ]
+
+    def create_subscription(self, request: CreateSubscriptionRequest) -> Subscription:
+        self.subscription_create_calls.append(request)
+        if self.failure:
+            raise self.failure
+        subscription = Subscription(
+            id=f"sub_fake_{len(self.subscriptions) + 1}",
+            plan_id=request.plan_id,
+            status="created",
+            short_url="https://rzp.io/i/subscription-fixture",
+            remaining_count=request.total_count,
+        )
+        self.subscriptions[subscription.id] = subscription
+        return subscription
+
+    def fetch_subscription(self, subscription_id: str) -> Subscription:
+        if self.failure:
+            raise self.failure
+        try:
+            return self.subscriptions[subscription_id]
+        except KeyError as exc:
+            raise ProviderError(
+                "razorpay", "fetch_subscription", "not_found", False, "Subscription unavailable"
+            ) from exc
+
+    def list_subscriptions(self) -> list[Subscription]:
+        if self.failure:
+            raise self.failure
+        return list(self.subscriptions.values())
+
+    def list_subscription_invoices(self, subscription_id: str) -> list[Invoice]:
+        return self.list_invoices(subscription_id=subscription_id)
 
     def create_order(self, request: CreateOrderRequest) -> PaymentOrder:
         self.create_calls.append(request)

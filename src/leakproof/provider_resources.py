@@ -184,6 +184,7 @@ def register_entity(
     # Parents can own many unpaid cycles: never bind them to just one invoice.
     if ref.entity_type in {EntityType.SUBSCRIPTION, EntityType.TOKEN}:
         obligation = None
+        root = None
     row = find_entity(session, scope, ref)
     if row is None:
         row = ProviderEntity(
@@ -601,7 +602,24 @@ def case_for_session(session: Session, demo: DemoSession) -> RecoveryCase | None
             obligation = session.get(ProviderObligation, obligation.alias_of)
         return session.get(RecoveryCase, obligation.case_id) if obligation.case_id else None
     if demo.primary_entity_type != "order":
-        return None  # subscription parents can have multiple cases; no latest-cycle guess
+        if demo.primary_entity_type == "subscription" and entity:
+            invoice_id = entity.safe_metadata.get("affected_invoice_id")
+            if invoice_id:
+                cycle = find_entity(
+                    session,
+                    ProviderScope(merchant_id=demo.merchant_id, mode=demo.provider_mode),
+                    EntityRef(entity_type="invoice", entity_id=invoice_id),
+                )
+                if cycle and cycle.obligation_id:
+                    obligation = session.get(ProviderObligation, cycle.obligation_id)
+                    while obligation.alias_of:
+                        obligation = session.get(ProviderObligation, obligation.alias_of)
+                    return (
+                        session.get(RecoveryCase, obligation.case_id)
+                        if obligation.case_id
+                        else None
+                    )
+        return None  # subscription parents can have multiple cases; use only reconciled cycle
     from leakproof.demo.contracts import live_case_dedupe_key
 
     return session.scalar(
