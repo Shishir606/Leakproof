@@ -181,3 +181,157 @@ the existing AI/simulator artifacts were byte-for-byte unchanged; results are sa
 `artifacts/baseline/leakproof-release-pfi4zn63/preservation.json`. The six original `leakproof`
 containers remained running (API/PostgreSQL/Redis healthy) after isolated cleanup. Committed
 sample audit files remain unchanged in the Git diff.
+
+## 2026-09-03 — Provider-capability investigation
+
+**Investigation complete; account lifecycle verification remains open.** This entry supersedes the
+earlier milestone-0 “not started” status. The plan now separates payable aging from invoice expiry,
+pins recurring failures to invoice obligations, qualifies mandate evidence by method/product, and
+requires one attribution ledger across surfaces. No application functionality for milestones 1–5
+was introduced. Their provider scenarios remain disabled/simulated until the respective gates pass.
+
+### Implementation inspected and reused
+
+- Reused `Settings` test credentials and `RazorpayPaymentProvider._request_json` for bounded GETs,
+  with one attempt per request, existing auth/timeout/error handling, and no new provider adapter.
+  No secrets, raw entities, customer details, provider identifiers, or hosted URLs were retained.
+- Retained the signed durable webhook inbox, payment/abandonment precedence, original-order
+  recovery, append-only case/action spine, and existing tests/fixtures. No completed baseline work
+  was repeated or rewritten; historical acceptance artifacts remain historical evidence.
+- Inspected `sensors/normalizer.py`, `sensors/processor.py`, `services.py`, provider contracts,
+  database constraints and existing webhook/measurement tests. The initial subscription normalizer
+  uses `paid_count` as `cycle_number`, resource creation time as occurrence time, and an amount
+  fallback that is not an invoice balance. Existing per-case attribution uniqueness and
+  customer/amount matching do not prevent cross-surface credit. These are explicit milestone-1
+  gates in plan sections 6.4 and 17.2, not fixes claimed in this investigation.
+
+### Read-only account evidence
+
+Probe started **2026-09-03 03:26:42 UTC (08:56:42 IST)** using configured `rzp_test_` credentials.
+The sanitized [probe record](evidence/razorpay-capability-readonly-2026-09-03.json) records paths,
+bounded query parameters, returned counts/statuses and limitations. Four GETs were attempted:
+
+| Read | Observed result | What it establishes |
+|---|---|---|
+| `/v1/orders?count=1&skip=0` | Successful JSON collection; one paid order | Current key can read this Orders collection; not a new payment rehearsal |
+| `/v1/invoices?count=10&skip=0` | Successful JSON collection; zero invoices returned | Invoice collection read accepted; no create/issue/pay/expire capability proven |
+| `/v1/plans?count=10&skip=0` | HTTP 401; adapter `authentication_failed` | Plan access unresolved; reason cannot be reduced to “Subscriptions disabled” from this response |
+| `/v1/subscriptions?count=10&skip=0` | HTTP 401; adapter `authentication_failed` | Subscription access unresolved; no lifecycle or enabled-method evidence |
+
+Counts describe these bounded responses, not an exhaustive account inventory. The configured HTTPS
+base and webhook secret are present; no Dashboard registration/delivery inspection was performed.
+No known linked recurring customer/token was available for a scoped token read. No POST/PATCH/PUT/
+DELETE provider requests, resource creation, hosted payment visits, webhook edits, Dashboard charge
+actions, or recipient/support contact occurred. Documentation was fetched separately from official
+Razorpay pages, including their published table content where the text renderer omitted tables.
+
+### Capability matrix
+
+“Documented” below is a research finding, not the runtime `CONTRACT_VERIFIED` label. No new adapter
+contract suite or signed account fixture was created; none of the new surfaces earns that label
+merely from this investigation. Full source links and decisions are in
+[plan sections 16–17](../MULTI_SURFACE_RECOVERY_IMPLEMENTATION_PLAN.md#16-official-sources-checked-3-september-2026).
+
+| Capability | Official support / supported decision | Account evidence / remaining gate | Current evidence level |
+|---|---|---|---|
+| Existing payment and abandonment | Reuse working order/payment recovery | Existing historical artifacts; one current Orders read; no fresh closure capture | Historical provider evidence retained, not upgraded |
+| Invoice APIs | Create/issue/fetch/list and state-limited mutations; typed read/setup boundary planned | Empty invoice collection read; writes and lifecycle untested | Documented + account read only; new recovery remains simulated |
+| Payable overdue invoice | App-owned aging threshold on `issued`/`partially_paid`; original hosted URL while unexpired | No invoice to prove hosted payment/partial settlement | Documented; not account verified |
+| Expired/non-payable invoice | `invoice.expired` stops payment CTA; merchant review; no expiry extension after expiry | No expiry event captured | Documented; not account verified |
+| Invoice events/closure | Partial/paid/expired events; invoice/payment reconciliation, incremental amounts only | HTTPS registration, signatures, event delivery and full/partial payment pending | Documented; not contract or account verified |
+| Subscription APIs/events | Plan/subscription CRUD subset plus subscription invoice listing and lifecycle webhooks | Plans/Subscriptions 401; no reusable plan, invoice-cycle mapping or method entitlement proven | Documented; account access unresolved |
+| Subscription recovery | Card-update Checkout or supported hosted method transition; provider-owned retries; old arrears require their own settlement | Manual charge is method-limited; no update/charge rehearsal available | Documented; interactive path gated |
+| Broken mandate | Candidate linked token cancellation, scoped eMandate inactive-mandate reason, or reconciled token expiry; explicit negative evidence rules | Recurring Payments vs Subscriptions linkage, token visibility and reproducible event emission unresolved; live allowlist empty | Documented candidates only; simulated |
+| Multiple surfaces on one debt | Canonical invoice obligation, same-case promotion, unique captured-payment ledger, no money for authorization/activation | Cross-surface DB constraints, reconciliation and tests are milestone-1 work | Design decision, not provider behavior or implemented protection |
+
+### Decisions resolved before implementation
+
+1. **Invoice state governs the action.** The plan has an exhaustive state/action table, including
+   draft, issued, partially paid, paid, expired, cancelled/deleted, and unknown/conflicting state.
+   Overdue is a local aging rule; expiry is a provider payment cutoff. No replacement resource is
+   silently created for expired debt. See [plan 17.1](../MULTI_SURFACE_RECOVERY_IMPLEMENTATION_PLAN.md#171-invoice-aging-expiry-and-actions).
+2. **The failed cycle is an invoice, not a counter.** Resolve provider relationships even when a
+   pending/halted payload lacks payment data. Multiple unpaid invoices can coexist. Missing or
+   ambiguous cycle evidence blocks contact and attribution. See [plan 17.2](../MULTI_SURFACE_RECOVERY_IMPLEMENTATION_PLAN.md#172-available-apievent-contracts-and-failed-cycle-identity).
+3. **Mandate classification needs precise evidence.** The reason `mandate_not_active` and the
+   superficially similar `payment_mandate_not_active` have different documented meanings. Token
+   rejection is registration failure; subscription cancellation alone is not mandate diagnosis.
+   No generic decline or plain halt qualifies. See [plan 17.3](../MULTI_SURFACE_RECOVERY_IMPLEMENTATION_PLAN.md#173-broken-mandate-evidence-precise-method-scoped-not-yet-account-enabled).
+4. **One obligation cannot earn four recoveries.** Linked payment, invoice, subscription and mandate
+   events enrich/reclassify one case. Unique payment settlement entries prevent duplicated credit
+   even across different event IDs or sessions; partial totals are never added twice. Authorization
+   repair and active subscription do not pay old invoices. Existing customer/amount fallback must
+   not apply to new surfaces. See [plan 6.4](../MULTI_SURFACE_RECOVERY_IMPLEMENTATION_PLAN.md#64-define-deduplication-and-precedence-before-implementation).
+5. **Documentation gaps are gates.** The broad test guide and more specific retry guide do not
+   justify promising that halted -> active clears arrears. Domestic-card manual charging is
+   excluded, and method-update restrictions/test-resource limitations need an actual account
+   rehearsal. See [plan 17.4](../MULTI_SURFACE_RECOVERY_IMPLEMENTATION_PLAN.md#174-recovery-restrictions-manual-tests-and-documentation-gaps).
+
+### Manual setup and rehearsal checklist — not performed in this step
+
+These actions require a later authorized setup/rehearsal. Do not run Dashboard test actions as
+read-only checks. Account prerequisites below remain unchecked even when an official guide describes
+them; no live-mode activation or production credentials are required by this project.
+
+- [ ] **Account owner / Dashboard:** confirm the selected account and Test Mode; resolve Plans and
+      Subscriptions 401 and verify enabled card/UPI/eMandate methods. Record the result without
+      exposing keys. Do not assume that a working Orders key grants each product.
+- [ ] **Dashboard webhook review/setup:** inspect existing endpoint/event selection and delivery
+      health. In a separately authorized change, add only the required invoice/subscription/token
+      events available for that account, preserving existing payment events and secrets. Capture
+      signature-verified delivery; existence in documentation is insufficient.
+- [ ] **Controlled notifications:** verify provider notification settings before creating test
+      resources. Use invoice `sms_notify=false` and `email_notify=false` for API setup and inspect
+      subscription `customer_notify`/Dashboard lifecycle settings. Confirm behavior with designated
+      test recipients later; assume neither all lifecycle messages nor all retries are suppressible
+      from a single flag. Retain Leakproof's allowlist and outbound gates.
+- [ ] **Plan/setup (Dashboard or API):** select one reusable test plan and record a private operator
+      configuration reference. Prepare separate authorization/update and charged-cycle resources as
+      needed; create no plan per demo run. No reusable plan is currently verified.
+- [ ] **Invoice setup (API or Dashboard):** prepare a non-GST invoice with explicit aging rule and
+      sufficient future expiry. For partial-payment testing enable partial payment at setup. Pay
+      partial then remaining balance as a human on the hosted invoice; capture events and reads.
+- [ ] **Invoice expiry (provider time, not a Dashboard test-charge button):** use a separate unpaid
+      invoice, respect the documented minimum future expiry, wait and capture expiry. Verify the
+      app removes its CTA; do not attempt to extend an already expired invoice. GST-specific setup,
+      if later needed, uses Dashboard rather than the non-GST API path.
+- [ ] **Subscription authorization (human Checkout):** authorize a fresh controlled test resource.
+      Keep token/refunded authorization amounts out of revenue; capture exact entity relationships.
+- [ ] **Subscription failure/success (manual Dashboard only in the reviewed test workflow):** use
+      **Charge this now**, choosing success or failure; four consecutive failures exercise halt.
+      Preserve one invoice through its retries. The public API index does not document an equivalent
+      test-charge endpoint; do not automate private Dashboard endpoints.
+- [ ] **Halted next cycle (manual Dashboard):** use **Issue Invoice** to demonstrate another unpaid
+      invoice without a charge; prove old-cycle isolation rather than using `paid_count` as a key.
+- [ ] **Arrears recovery (human + eligible Dashboard action):** update the method, then inspect the
+      old invoice. Where supported, **Attempt Charge** on that exact issued invoice proves arrears
+      settlement; domestic cards are excluded. If unavailable, retain merchant review/active with
+      unpaid arrears and do not claim a completed recovery loop.
+- [ ] **Test timing/update constraints:** perform subsequent test card charges within three days of
+      token creation. Use a separate pre-subsequent-charge subscription for general update tests;
+      verify card-change behavior separately rather than extrapolating from this limitation.
+- [ ] **Mandate evidence (method-specific, no proven test simulator):** establish token-to-
+      subscription/invoice linkage and capture a real invalid-authorization event or read. For UPI,
+      token list visibility may need `save_vpa`; verify account access. Customer cancellation may
+      require the UPI app/bank portal, not Dashboard, and may terminate the subscription. Merchant
+      cancellation or repeated generic test failures must not be relabelled as revoked mandate.
+- [ ] **Acceptance:** retain sanitized real lifecycle captures; run adapter/normalizer contracts,
+      cross-surface duplicate/order/partial-payment/concurrency tests, and entity-specific closure
+      validation before changing capability labels. Keep unsupported interactions disabled.
+
+**Next implementation:** milestone 1 can proceed using these contracts and existing tests while
+account prerequisites remain explicit. Resource setup, webhook changes, and provider lifecycle
+rehearsals are still outstanding; this step did not satisfy them through documentation.
+
+### Validation and preservation
+
+Reused the existing `tests/test_webhooks.py`, `tests/test_api_august_30.py`,
+`tests/test_api_august_31.py`, and `tests/test_measurement.py`: **40 tests passed**. Their fixtures
+isolate credentials and use fake/mock providers. They verify the retained baseline, not the new
+invoice/subscription/mandate contracts. No new tests were necessary for this documentation-only
+step. Full release/build/migration gates were not repeated because runtime code was not changed.
+
+The two Markdown documents and the sanitized GET probe record are the only deliverables changed.
+Checked JSON structure, local Markdown targets, credential/provider-ID redaction and Git whitespace.
+No database migration, service restart, deployment, commit or push occurred; existing acceptance
+artifacts and application/tests were preserved.

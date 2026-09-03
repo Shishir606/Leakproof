@@ -1,0 +1,68 @@
+{
+  "checked_at": "2026-09-03T03:26:42.303879+00:00",
+  "environment": "Razorpay test key",
+  "scope": "GET collection probes only; no resource creation, mutation, hosted URL visit or recipient contact",
+  "raw_entities_retained": false,
+  "adapter_reused": "RazorpayPaymentProvider._request_json",
+  "checks": [
+    {
+      "method": "GET",
+      "path": "/v1/orders",
+      "query": {
+        "count": 1,
+        "skip": 0
+      },
+      "result": "successful_json_response",
+      "collection_entity": "collection",
+      "returned_count": 1,
+      "items_observed": 1,
+      "observed_statuses": {
+        "paid": 1
+      },
+      "observed_types": {
+        "not_present": 1
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/v1/invoices",
+      "query": {
+        "count": 10,
+        "skip": 0
+      },
+      "result": "successful_json_response",
+      "collection_entity": "collection",
+      "returned_count": 0,
+      "items_observed": 0,
+      "observed_statuses": {},
+      "observed_types": {}
+    },
+    {
+      "method": "GET",
+      "path": "/v1/plans",
+      "query": {
+        "count": 10,
+        "skip": 0
+      },
+      "result": "provider_error",
+      "status_code": 401,
+      "error_class": "authentication_failed"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/subscriptions",
+      "query": {
+        "count": 10,
+        "skip": 0
+      },
+      "result": "provider_error",
+      "status_code": 401,
+      "error_class": "authentication_failed"
+    }
+  ],
+  "limitations": [
+    "Successful collection reads do not prove create/issue/charge permissions, enabled recurring methods, webhook subscriptions or lifecycle behavior.",
+    "Only the bounded first page was requested; counts are not account totals.",
+    "No invoice/subscription/mandate lifecycle rehearsal or signed payload capture was performed."
+  ]
+}

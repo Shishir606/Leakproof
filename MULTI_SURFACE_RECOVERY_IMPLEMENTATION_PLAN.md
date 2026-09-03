@@ -1,7 +1,7 @@
 # Leakproof: All Five Recovery Surfaces Implementation Plan
 
 **Prepared:** 2 September 2026  
-**Status:** Proposed extension after the current payment-recovery release  
+**Status:** Capability investigation complete 3 September 2026; account prerequisites and implementation remain open
 **Audience:** Implementers, reviewers, and Razorpay recruiters
 
 ## 1. Outcome
@@ -11,8 +11,8 @@ workbench for all five existing leak types:
 
 1. `PAYMENT_FAILURE` — preserve the current provider-verified flow.
 2. `CHECKOUT_ABANDON` — stabilize and prove the existing telemetry-driven flow.
-3. `INVOICE_OVERDUE` — detect unpaid/expired invoices and recover through the original hosted
-   invoice payment surface.
+3. `INVOICE_OVERDUE` — detect aged, unpaid invoices; recover payable invoices through the original
+   hosted surface and route expired/non-payable invoices to merchant review.
 4. `SUBSCRIPTION_HALT` — detect pending or halted subscriptions and recover through an explicit
    payment-method update or customer-authorized charge.
 5. `MANDATE_BROKEN` — distinguish a revoked, expired, or cancelled recurring authorization from a
@@ -108,9 +108,9 @@ The five cards should read as follows:
 |---|---|---|---|
 | Payment failure | `payment.failed` or current payment API verification | Retry the original order in Checkout | Captured payment verification, `payment.captured`, or `order.paid` |
 | Checkout abandonment | Signed session telemetry plus unpaid-order recheck | Reopen the original order in Checkout | Captured payment verification, `payment.captured`, or `order.paid` |
-| Invoice overdue | `invoice.expired`, or a reconciler-confirmed issued invoice beyond the configured threshold with `amount_due > 0` | Open the original Razorpay invoice `short_url` | `invoice.paid` or API-confirmed `amount_due == 0`; partial payment updates risk but does not close |
-| Subscription halt | `subscription.pending` or `subscription.halted` | Update the payment method; expose manual charge only as an operator instruction | `subscription.charged` plus active/activated state, correlated to the failed cycle |
-| Mandate broken | Recurring-payment/subscription evidence with an allowlisted mandate-invalid reason | Re-authorize or change the recurring payment method | New authorization followed by active subscription and a successful correlated charge |
+| Invoice overdue | Re-fetch confirms an aged `issued`/`partially_paid` invoice with `amount_due > 0`; `invoice.expired` is a separate non-payable risk state | Original `short_url` only while payable; otherwise merchant review | Verified full settlement of that invoice; partial payments reduce risk and credit only new paid amounts |
+| Subscription halt | `subscription.pending` or `subscription.halted`, resolved to the unpaid invoice | Customer payment-method update; eligible old-invoice Dashboard charge is operator-only and unsupported for domestic cards | Captured settlement of the affected invoice; subscription reactivation is a separate service-state fact |
+| Mandate broken | Correlated, method-specific evidence approved under section 17.3 | Customer re-authorization where the subscription is still recoverable; cancelled subscriptions require merchant review | Authorization repair and captured settlement of the affected invoice are separate outcomes |
 
 ## 6. Shared architecture changes
 
@@ -173,7 +173,7 @@ Normalize the following events:
 | Checkout/payment | Existing browser dismissal and `payment.failed` | `payment.captured`, `order.paid` |
 | Invoice | `invoice.expired`, `invoice.partially_paid` | `invoice.paid` |
 | Subscription | `subscription.pending`, `subscription.halted`, relevant recurring `payment.failed` | `subscription.charged`, `subscription.activated` |
-| Mandate | A recurring failure with a verified mandate-invalid reason; correlated subscription halt may add evidence | Successful re-authorization plus correlated `subscription.charged`/`subscription.activated` |
+| Mandate | Evidence-qualified recurring failure or linked token cancellation; see section 17.3 | Verified authorization repair; only affected-invoice settlement proves revenue |
 
 Raw webhook bodies may contain customer name, email, phone, and address. Keep them in the protected
 webhook inbox only for the minimum necessary retention period; never copy them into case events,
@@ -181,26 +181,57 @@ model input, logs, projections, or acceptance artifacts.
 
 ### 6.4 Define deduplication and precedence before implementation
 
-Use stable case roots:
+**One obligation, one case, one monetary ledger, regardless of event surface.** These are design
+requirements, not safeguards already implemented for new surfaces.
 
-- Payment failure and abandonment: session + order, as today.
-- Invoice overdue: merchant + invoice ID.
-- Subscription halt: merchant + subscription ID + billing cycle/invoice ID.
-- Mandate broken: merchant + subscription/authorization root + affected billing cycle.
+- Namespace every identity by merchant, provider, and test/live mode. Use the provider invoice ID
+  as the canonical obligation when present, including subscription-generated invoices. Map its
+  order and every payment attempt to that same obligation. A standalone order keeps the existing
+  session/order binding and additionally has one provider-order identity across sessions.
+- A subscription is a parent of multiple invoice obligations, not one monetary obligation. A token
+  is authorization evidence, not another receivable. Preserve these relationships in
+  `provider_entities`; one `root_entity_id` alone must not collapse all subscription cycles.
+- Enforce unique obligation -> case ownership in the database. Classify the existing case by
+  `MANDATE_BROKEN` (only qualified evidence) > `SUBSCRIPTION_HALT` (linked recurring failure) >
+  `INVOICE_OVERDUE` (aging/non-payability) > `PAYMENT_FAILURE` > `CHECKOUT_ABANDON`. Precedence
+  applies only within the same proven obligation; no cross-customer or cross-cycle promotion.
+- Resolve payment -> invoice -> subscription before dispatching actions or money attribution.
+  Missing/ambiguous links go into a non-attributable reconciliation state; do not guess from
+  customer, matching amounts, `paid_count`, or the most recent invoice. Provisional observations
+  do not send contact. If an order case already exists when its invoice relationship arrives,
+  attach it atomically to the canonical obligation, preserving case/action history. Conflicting
+  legacy owners require a reviewed merge/alias with one counted owner and all duplicate actions
+  cancelled before eligibility is restored; never leave two independently credited cases.
+- Reclassification preserves case ID, arm, detection time, attribution window, and existing credit.
+  Cancel obsolete pending actions; use the existing case/step idempotency and shared contact limits.
+  A token affecting several cycles may annotate each actual unpaid invoice, but authorization
+  repair is deduplicated at subscription/token level and does not spawn one contact per invoice.
+- Add a settlement ledger uniquely keyed by `(merchant, provider, mode, payment_id)` and linked to
+  one obligation. `payment.captured`, `order.paid`, `invoice.paid`, `invoice.partially_paid`,
+  `subscription.charged`, webhook redelivery, and API reconciliation are observations of the same
+  settlement. A cumulative amount or a new webhook ID is never a second monetary credit. Resolve
+  payment IDs before monetary attribution; unresolved invoice-paid evidence can stop contact and
+  show settlement pending reconciliation without guessing credit.
+- At detection, freeze the unpaid balance and baseline paid amount. Reduce risk on partial payment;
+  credit only unique, post-detection captured payments applied to that balance, capped by the
+  original unpaid amount, and never add the cumulative invoice total again at final settlement.
+  Example: 100 total, 20 already paid at detection, then 30 and 50 paid -> 80 maximum recovery,
+  regardless of how many surface events arrive. Keep existing last-touch/window/organic rules;
+  provider settlement alone does not establish incremental causal lift or a Leakproof action.
+- Serialize reconciliation per obligation and insert settlement credit transactionally under the
+  unique constraint. Success arriving before risk produces no retrospective recovery credit.
+  Preserve full-settlement truth against delayed failures/expiry; re-fetch conflicting snapshots.
+  Webhook envelope `created_at` is event time; entity `created_at` is often resource creation time,
+  not state-transition time. Razorpay does not promise a general entity version: do not invent one.
+- Zero-value registration invoices, authorization payments/refunds, method updates, `activated`,
+  and token confirmation carry no recovered-invoice revenue. A later-cycle charge cannot close an
+  earlier unpaid invoice. Subscription active/authorization repaired and invoice settled must be
+  separate projection facts. Cancel contact on settlement even if subscription state lags.
 
-Precedence rules:
-
-1. `PAYMENT_FAILURE` replaces `CHECKOUT_ABANDON` for the same order/attempt.
-2. `MANDATE_BROKEN` replaces `SUBSCRIPTION_HALT` for the same cycle only when provider evidence
-   contains an allowlisted mandate-invalid reason. A generic failure must stay a subscription halt.
-3. `invoice.partially_paid` updates `amount_at_risk` to `amount_due`; it must not create another
-   case or close the original one.
-4. Success received before a delayed failure is retained as terminal truth when its provider event
-   time and entity version are newer.
-5. Duplicate webhooks may create one inbox receipt but no duplicate cases, actions, emails, timers,
-   or terminal events.
-
-Create table-driven tests for every pair of competing events before wiring UI behavior.
+Extend existing duplicate/order-success/replay tests with these event permutations, partial-payment
+arithmetic, concurrent inserts, cross-session ownership, late relationship resolution, ambiguous
+cycles, and two unpaid cycles. Today `uq_attribution_case` alone and the customer/amount fallback in
+`record_paid_signal` do **not** satisfy this gate; bypass that fallback for new provider surfaces.
 
 ### 6.5 Make recovery tokens entity-aware
 
@@ -215,8 +246,10 @@ Version the signed recovery token and bind it to:
 - order: return the existing Checkout material only if the original order is unpaid;
 - invoice: return a server-approved redirect to the invoice's current provider `short_url` only if
   `amount_due > 0` and the invoice is payable;
-- subscription/mandate: return Checkout configuration for payment-method update only if the
-  subscription remains pending/halted and belongs to the bound session.
+- subscription/mandate: return a documented card-change Checkout configuration or provider-hosted
+  method-update surface only for a verified supported method/state and bound subscription. The
+  card-change flag is not a universal mandate API; use section 17.4's method restrictions. A
+  cancelled/expired/completed subscription has no same-subscription restart recovery CTA.
 
 Never embed the provider URL or configuration in the token. Do not treat opening the URL as a
 successful recovery.
@@ -263,13 +296,14 @@ original order, complete payment, and see the same case close with verified reco
 1. Add typed create, issue, and fetch invoice operations. The demo setup must disable provider
    notification when Leakproof is responsible for the optional allowlisted follow-up.
 2. Persist the invoice relationship and safe amount fields when the test invoice is created.
-3. Detect `invoice.expired` from signed webhooks. Add a scheduled reconciliation path for issued
-   invoices that cross a configured overdue threshold and still have `amount_due > 0`; the API
-   re-fetch is the authority for this derived detection.
+3. Detect `invoice.expired` as non-payable risk requiring merchant review. Reconcile `issued` and
+   `partially_paid` invoices against an application-owned aging threshold and positive due amount;
+   `expire_by` is a payment cutoff, not a business due date. Apply section 17.1's payable-state gate.
 4. On `invoice.partially_paid`, append an immutable event, update outstanding risk, and retain the
    case. On `invoice.paid`, close and attribute only the remaining/recovered amount according to a
    documented partial-payment rule.
-5. Use the provider's original invoice `short_url`; do not create a second order or Payment Link.
+5. Use the original invoice `short_url` only while payable. Expired invoices cannot be revived by
+   extending `expire_by`; do not create a replacement order, invoice, or Payment Link in recovery.
 6. Add invoice-specific email wording and show due amount, aging bucket, partial payments, and the
    provider state in the projection without exposing customer details.
 
@@ -281,20 +315,22 @@ events converge on the same final projection.
 
 1. Add a reusable test plan configured by environment, then create a subscription against it. Do
    not create unbounded plans per demo run.
-2. Store subscription, current invoice/cycle, plan amount, and safe retry counters in
-   `provider_entities`.
+2. Store subscription, exact affected invoice/cycle, actual invoice amount/due/currency, and safe
+   retry counters in `provider_entities`. Plan price alone is not the outstanding balance.
 3. Treat `subscription.pending` as early risk and `subscription.halted` as escalation of the same
    cycle case. Do not create one case per retry.
 4. Correlate recurring `payment.failed` payloads and invoices to the subscription before diagnosis.
 5. Present Razorpay's payment-method update flow. Leakproof may explain that Razorpay owns automatic
    retries; it may not initiate an extra debit.
-6. Close only after a correlated successful charge and an active/activated subscription state.
-   `subscription.activated` without proof of the affected invoice/charge should update state but not
-   over-attribute money.
+6. Settle/close the monetary obligation only after verified full payment of the affected invoice;
+   track active/activated service state separately. A method update from pending can charge the last
+   invoice, while halted -> active does not guarantee old arrears were charged. Never settle an old
+   cycle from a future cycle's charge or activation alone.
 
-**Acceptance gate:** consecutive test-mode failures move one subscription case from pending to
-halted, payment-method recovery returns it to active, a correlated charge closes the same case, and
-no Leakproof action can double-charge it.
+**Acceptance gate:** Dashboard-controlled test failures move one invoice case from pending to
+halted; method recovery and exact-invoice settlement are independently proven. If eligible manual
+arrears charging is unavailable, show active-with-arrears and merchant review rather than claiming
+recovery. No Leakproof action can double-charge it.
 
 ### Track D — Broken mandate
 
@@ -309,13 +345,14 @@ This is a specialized recurring-recovery track, not a second subscription implem
    arrives, refresh diagnosis, cancel obsolete actions, and plan the payment-method update ladder.
 4. The recovery action must require explicit payer authorization. Do not store card, VPA, bank
    account, or authorization secrets.
-5. Close after a new authorization is provider-confirmed and the affected subscription/cycle has a
-   successful charge. Track “authorization repaired” and “revenue recovered” as separate events.
+5. Record authorization repair only after provider confirmation. Close the monetary obligation on
+   verified full settlement of the affected invoice; any unrepaired authorization remains a
+   separate state, without continued collection contact for a settled invoice.
 
 **Acceptance gate:** a real test-mode provider event proves the classification and a later
-re-authorization plus successful charge closes the same case. If the test account cannot reliably
-emit the required evidence, ship this track as `CONTRACT_VERIFIED`, keep its interactive scenario
-disabled, and state the limitation plainly.
+re-authorization plus exact-invoice settlement completes recovery. If the test account cannot
+reliably emit the required evidence, keep its interactive scenario disabled. Use `CONTRACT_VERIFIED`
+only after actual adapter/fixture contract tests pass; documentation alone leaves it simulated.
 
 ## 8. API and contract changes
 
@@ -353,16 +390,19 @@ variant.
 
 ## 10. Delivery sequence
 
-### Milestone 0 — Provider capability spike
+### Milestone 0 — Provider capability investigation (complete; rehearsal prerequisites open)
 
-- Confirm Invoices and Subscriptions are enabled in the Razorpay test account.
-- Register invoice and subscription webhook events on the stable HTTPS endpoint.
-- Capture sanitized real payloads for invoice expiry/partial/full payment, subscription
-  pending/halted/charged/activated, and mandate-invalid behavior.
-- Record unsupported or non-deterministic test-mode behaviors before designing UI promises.
+- Official APIs, event schemas, state/action decisions, and documentation gaps checked on
+  2026-09-03; see section 17 and the progress log's capability matrix/manual checklist.
+- Existing adapter reused for GET probes: Orders readable, Invoices readable with zero returned
+  items, Plans and Subscriptions return HTTP 401. Cause/entitlements remain unresolved.
+- No provider resource creation, webhook registration change, debit, or recipient contact occurred.
+- Account activation/access resolution, webhook selection, resource setup, and signed lifecycle
+  captures belong to a later explicitly authorized rehearsal, not this read-only investigation.
 
-**Exit:** an evidence matrix identifies which tracks can earn `LIVE_PROVIDER_VERIFIED` and which
-must remain `CONTRACT_VERIFIED`.
+**Exit met:** supported implementation decisions and unmet prerequisites are recorded. New surfaces
+remain simulated; no account lifecycle or new contract evidence label was earned. Milestone 1 may
+build against documented contracts, with interactive provider claims blocked until rehearsal.
 
 ### Milestone 1 — Multi-entity foundation
 
@@ -429,8 +469,8 @@ Add surface-specific cases:
 | Surface | Required edge cases |
 |---|---|
 | Checkout abandonment | Duplicate dismissal, dismissal then failure, dismissal then success, failed broker enqueue, expired session |
-| Invoice | Partial payments, amount-due update, expired then paid, paid then late expired, cancelled/non-payable invoice |
-| Subscription | Several retries in one cycle, pending -> active, pending -> halted, halted -> active, next cycle after old case closure |
+| Invoice | Partial-payment deltas, overdue-but-payable vs expired, no expired recovery CTA, paid then late expired, contradictory expired/paid snapshots re-fetched, cancelled/deleted/draft, registration invoice excluded |
+| Subscription | Several retries in one invoice, payment missing from pending/halted payload, two unpaid invoices with the same paid_count, pending -> active, halted -> active with arrears, next-cycle charge does not close old cycle |
 | Mandate | Generic failure must not classify as mandate broken, strong evidence reclassifies one existing case, authorization repaired without charge, charge after re-authorization |
 
 Provider fixtures must originate from official examples or sanitized test-account captures and be
@@ -501,7 +541,7 @@ that correctly handles five different payment-product state machines.”
 6. Separate authorization repair from recovered revenue.
 7. Gate public capability claims with actual sanitized provider rehearsals.
 
-## 16. External references to revalidate at implementation time
+## 16. Official sources checked 3 September 2026
 
 - [Razorpay webhook behavior and verification](https://razorpay.com/docs/webhooks/)
 - [Razorpay invoice webhook payloads](https://razorpay.com/docs/webhooks/invoices/)
@@ -509,6 +549,149 @@ that correctly handles five different payment-product state machines.”
 - [Razorpay subscription webhook payloads](https://razorpay.com/docs/webhooks/subscriptions/)
 - [Razorpay subscription test workflow](https://razorpay.com/docs/payments/subscriptions/test/)
 - [Razorpay subscription retry behavior](https://razorpay.com/docs/payments/subscriptions/payment-retries/)
+- [Invoice state semantics](https://razorpay.com/docs/payments/invoices/states/)
+- [State-specific invoice updates](https://razorpay.com/docs/api/payments/invoices/update/)
+- [Issue invoice and minimum expiry](https://razorpay.com/docs/api/payments/invoices/issue/)
+- [Subscription APIs](https://razorpay.com/docs/api/payments/subscriptions/)
+- [Subscription invoice relationship and billing fields](https://razorpay.com/docs/api/payments/subscriptions/fetch-invoices/)
+- [Subscription entity](https://razorpay.com/docs/api/payments/subscriptions/entity/)
+- [Subscription states](https://razorpay.com/docs/payments/subscriptions/states/)
+- [Manual charge restrictions](https://razorpay.com/docs/payments/subscriptions/manually-charge-card/)
+- [Subscription method/account limitations](https://razorpay.com/docs/payments/subscriptions/faqs/)
+- [Recurring Payments token and registration events](https://razorpay.com/docs/api/payments/recurring-payments/webhooks/)
+- [eMandate error reasons](https://razorpay.com/docs/payments/recurring-payments/emandate/errors/)
+- [eMandate token fetch semantics](https://razorpay.com/docs/api/payments/recurring-payments/emandate/tokens/)
+- [UPI token access prerequisites](https://razorpay.com/docs/api/payments/recurring-payments/upi/tokens/)
+- [Webhook delivery/deduplication](https://razorpay.com/docs/webhooks/best-practices/)
 
 Provider behavior, account entitlements, event availability, and test-mode limits must be checked
 again immediately before implementing each provider-backed milestone.
+
+## 17. Capability decisions and unresolved account gates
+
+Evidence terms in this section are deliberately separate: **documented** means supported by the
+official references; **account observed** means the bounded read actually succeeded; **unverified**
+means no account lifecycle capture. The dated, identifier-free probe record is
+[`docs/evidence/razorpay-capability-readonly-2026-09-03.json`](docs/evidence/razorpay-capability-readonly-2026-09-03.json).
+It is an access observation, not an acceptance artifact or a webhook fixture.
+
+### 17.1 Invoice aging, expiry, and actions
+
+There is no documented `overdue` provider status or `invoice.overdue` webhook. Define aging in
+Leakproof: at a recorded reconciliation time, a valid `issued`/`partially_paid` invoice has positive
+`amount_due` and has passed an explicit merchant due time, or `issued_at + configured age threshold`
+when no due time exists. Record the rule and threshold. Missing timestamps do not default to overdue.
+Do not substitute `expire_by` or `billing_end` for that business rule. Expiry disables payment;
+aging alone does not. Sources: [invoice states](https://razorpay.com/docs/payments/invoices/states/),
+[invoice fields](https://razorpay.com/docs/api/payments/invoices/fetch-with-id/).
+
+| Current provider state | Supported recovery decision |
+|---|---|
+| `draft` | Setup incomplete, not an overdue case. An operator can complete/issue it in a later authorized setup; no payer link now. |
+| `issued` | Original hosted invoice URL while positive balance, valid currency/ownership, and no elapsed expiry. An operator may extend `expire_by` before expiry; Leakproof recovery does not mutate it. |
+| `partially_paid` | Same hosted URL for remaining balance while unexpired; keep the same case. Do not promise expiry extension here: documented updates allow notes only. |
+| `paid` | Stop recovery/contact and reconcile actual settlement. Do not offer another payment. |
+| `expired` | Non-payable; merchant review. No reopen, reissue, or expiry-extension recovery API is supported by the reviewed state/update contract. |
+| `cancelled` / `deleted` | No payment CTA and no automatic replacement resource; merchant review/non-recovered terminal disposition. |
+| Unknown, unavailable, or contradictory | Hold the CTA, re-fetch/reconcile, then merchant review if unresolved. A URL, null/zero balance, or expired timestamp alone does not establish settlement. |
+
+An elapsed `expire_by` with a still-issued snapshot is conservatively non-payable until re-fetched.
+An apparent expired -> paid event sequence is a reconciliation/ordering test, not a promised ability
+to pay after expiry. Use `status=paid`, consistent due/paid amounts, and linked settlement evidence;
+zero `amount_due` alone may describe a registration or non-revenue resource. State/action restrictions
+come from [invoice updates](https://razorpay.com/docs/api/payments/invoices/update/) and
+[invoice lifecycle](https://razorpay.com/docs/payments/invoices/states/).
+
+### 17.2 Available API/event contracts and failed-cycle identity
+
+| Product | Documented contract | Scope decision |
+|---|---|---|
+| Invoices | `GET /v1/invoices`, `GET /v1/invoices/:id`; create `POST /v1/invoices`; issue `POST /v1/invoices/:id/issue`; update `PATCH /v1/invoices/:id`; cancel `POST /v1/invoices/:id/cancel`; delete `DELETE /v1/invoices/:id`; notification and item APIs also exist | Implement only typed create/issue/fetch/list needed for later setup/reconciliation; no notifications or replacements in recovery. Invoice API creation is non-GST. |
+| Invoice events | `invoice.partially_paid`, `invoice.paid`, `invoice.expired` | No overdue event; periodic reads also detect unsupported/terminal changes. |
+| Plans/subscriptions | Create/list/fetch plans and subscriptions; subscription-link creation; update, pending-update fetch/cancel, cancel, pause/resume, offer link/remove; `GET /v1/invoices?subscription_id=:sub_id` | Typed fetch/list/correlation first; one configured reusable plan in later setup. Resume API is for paused subscriptions, not an arrears retry API. No public test-charge/manual-charge endpoint appears in this API index. |
+| Subscription events | `subscription.authenticated`, `.activated`, `.charged`, `.completed`, `.updated`, `.pending`, `.halted`, `.paused`, `.resumed`, `.cancelled` | Normalize lifecycle without inventing `subscription.failed` or relying on an undocumented `subscription.expired` event. Only actual affected-invoice payments carry revenue. |
+| Payments | Existing fetch/list-order-payments; `payment.failed`, `payment.captured`, `order.paid`; authorization is distinct | Reuse transport/inbox; add explicit invoice/subscription relationships before dispatch. |
+
+Sources: [Invoice APIs](https://razorpay.com/docs/api/payments/invoices/),
+[invoice events](https://razorpay.com/docs/webhooks/invoices/),
+[Subscription APIs](https://razorpay.com/docs/api/payments/subscriptions/),
+[subscription events](https://razorpay.com/docs/webhooks/subscriptions/).
+
+Use `payment.invoice_id` when supplied, fetch that invoice, and verify `invoice.subscription_id`,
+`order_id`, currency and amount. Otherwise paginate subscription invoices and resolve the affected
+unpaid invoice from preserved provider relationships and billing-period evidence. Store invoice ID
+as the cycle identity, with `billing_start`/`billing_end` as context; `current_start`/`current_end`
+describe the current subscription period and can advance while arrears remain. Do not infer a
+unique failed cycle from `paid_count` (successful cycles), `auth_attempts` (retry count), `charge_at`
+(next attempt), plan price, or subscription creation time. The official pending/halted examples may
+contain only a subscription, so absence of payment is valid. With multiple possible unpaid invoices,
+retain subscription state and require reconciliation before case attribution or contact. Sources:
+[subscription invoice API](https://razorpay.com/docs/api/payments/subscriptions/fetch-invoices/),
+[entity fields](https://razorpay.com/docs/api/payments/subscriptions/entity/).
+
+### 17.3 Broken-mandate evidence: precise, method-scoped, not yet account enabled
+
+| Evidence | Decision |
+|---|---|
+| Signed `token.cancelled` with `payload.token.entity.id`, matching known authorization, and `recurring_details.status=cancelled` | Documents explicit authorization cancellation/deactivation. A verified GET returning the same linked status is also candidate evidence. The token event is documented for UPI/cards in **Recurring Payments**, not automatically proven for this account's Subscriptions product. |
+| Failed eMandate subsequent payment with exact `error_reason=mandate_not_active` (or API `error.reason`) and a proven authorization/obligation link | Documented candidate reason: previously registered mandate is no longer active. Require method, operation, and relationship checks; never parse free-text `error_description`. |
+| Known authorization token with provider expiry field `expired_at` at/before observation time | Candidate expiry evidence only with method-specific schema, prior linkage and current provider reconciliation. The field can contain a future expiry date despite its name. Missing token from a list is not proof of expiry. No generic `token.expired` event is promised. |
+| `token.rejected` / `recurring_details.status=rejected` | Failed initial registration, not proof that an established mandate broke; record authorization-setup failure separately. |
+| `payment_mandate_not_active` | Bank activation pending, not proof of revocation. Exclude from broken-mandate allowlist. |
+| `token.paused`, `subscription.paused`, `subscription.cancelled`, plain pending/halted, `recurring=false`, generic decline/insufficient funds, `payment_cancelled`, card expiry alone | State/setup/payment evidence, insufficient by itself for this classification. Cancellation also blocks the same-subscription restart CTA; respect payer cancellation rather than treating it as generic involuntary churn. |
+
+Sources: [token event schemas](https://razorpay.com/docs/api/payments/recurring-payments/webhooks/),
+[eMandate reason definitions](https://razorpay.com/docs/payments/recurring-payments/emandate/errors/),
+[token fields and fetch limits](https://razorpay.com/docs/api/payments/recurring-payments/emandate/tokens/).
+
+The **live mandate allowlist remains empty** until the enabled method emits a sanitized account
+capture proving these fields and their subscription/cycle linkage. Do not invent generic
+`mandate.revoked`/`mandate.expired` names or reason codes. Token reads are documented as
+`GET /v1/payments/:id` for `token_id`, then `GET /v1/customers/:id/tokens`; list omission is ambiguous
+(expired/unused tokens may be omitted, UPI visibility requires `save_vpa`). No linked subscription,
+customer/token resource was available for such a scoped read here. `token.confirmed` can establish
+registration only after proven linkage; it does not establish payment. See
+[UPI token prerequisites](https://razorpay.com/docs/api/payments/recurring-payments/upi/tokens/).
+
+### 17.4 Recovery restrictions, manual tests, and documentation gaps
+
+Use Checkout `subscription_id` plus `subscription_card_change=true` for documented card update.
+Provider-hosted payment-method update supports a documented matrix: card -> card/UPI/eMandate;
+UPI -> card; eMandate -> card. Do not promise UPI -> UPI/eMandate or eMandate -> UPI/eMandate on
+this flow. Method availability remains an account prerequisite. Razorpay owns retries; neither
+general subscription PATCH nor paused-subscription resume is a payment-method repair/charge API.
+Source: [payment retries and method update](https://razorpay.com/docs/payments/subscriptions/payment-retries/).
+
+The test guide broadly describes successful card changes causing charge and activation; the retry
+guide distinguishes pending's last-invoice charge from halted arrears requiring manual collection.
+Therefore no method-update callback or active state settles arrears without invoice/payment proof.
+Manual invoice `Attempt Charge` is a Dashboard action for an issued invoice and is explicitly
+unsupported for domestic cards. Treat arrears recovery as unavailable when the account/method lacks
+that action, rather than adding an autonomous debit or replacement Payment Link. Sources:
+[manual charge](https://razorpay.com/docs/payments/subscriptions/manually-charge-card/),
+[subscription states](https://razorpay.com/docs/payments/subscriptions/states/).
+
+Deterministic subscription test charges require Dashboard **Charge this now** with success/failure
+selection; four consecutive failures demonstrate pending -> halted. Halted **Issue Invoice** creates
+an additional unpaid cycle without charging. **Attempt Charge** on a selected older invoice tests
+arrears separately. The test guide limits subsequent card debits to three days after token creation
+and subscription-update testing to resources without subsequent test charges. Keep separate test
+resources for those tests; do not assume the update restriction either proves or rules out the
+card-change recovery flow. There is no documented deterministic Dashboard broken-mandate simulator
+in the reviewed guide. Sources: [test workflow](https://razorpay.com/docs/payments/subscriptions/test/),
+[method/account FAQ](https://razorpay.com/docs/payments/subscriptions/faqs/).
+
+For invoices, setup can use API or Dashboard; aging is an app threshold, expiry needs provider time
+to pass, and partial/full payment needs a human on the hosted invoice. Issuance documents at least
+15 minutes of future expiry, so do not promise an instant expiry button. GST-specific invoice setup
+is Dashboard work outside the minimal non-GST API demo. Sources:
+[issue constraints](https://razorpay.com/docs/api/payments/invoices/issue/),
+[Invoice APIs](https://razorpay.com/docs/api/payments/invoices/).
+
+Unresolved account gates: explain Plans/Subscriptions HTTP 401 with the account owner; confirm test
+product/method entitlements; select a reusable plan; inspect enabled HTTPS webhook events and
+signature delivery; verify hosted-method update and notifications under controlled test-recipient
+settings; capture invoice, subscription, and mandate lifecycle evidence. A configured webhook secret
+and HTTPS base URL do not prove event registration or delivery. No Dashboard settings were inspected
+or changed, and no recipient or provider support was contacted in this investigation. The progress
+log contains the manual checklist for a later authorized rehearsal.
