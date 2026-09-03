@@ -110,16 +110,21 @@ def attribution_window(leak_type: LeakType) -> timedelta:
         raise ValueError(f"missing attribution window for {leak_type.value}") from exc
 
 
-def ensure_principals(session: Session, signal: NormalizedSignal) -> None:
-    if session.get(Merchant, signal.merchant_id) is None:
-        merchant = Merchant(id=signal.merchant_id, name=signal.merchant_id, policy={})
+def ensure_merchant(session: Session, merchant_id: str) -> None:
+    """Persist the merchant before any case or payment-observation foreign key uses it."""
+    if session.get(Merchant, merchant_id) is None:
+        merchant = Merchant(id=merchant_id, name=merchant_id, policy={})
         try:
             with session.begin_nested():
                 session.add(merchant)
                 session.flush()
         except IntegrityError:
-            if session.get(Merchant, signal.merchant_id) is None:
+            if session.get(Merchant, merchant_id) is None:
                 raise
+
+
+def ensure_principals(session: Session, signal: NormalizedSignal) -> None:
+    ensure_merchant(session, signal.merchant_id)
     if session.get(Customer, signal.customer_id) is None:
         customer = Customer(id=signal.customer_id, merchant_id=signal.merchant_id)
         try:

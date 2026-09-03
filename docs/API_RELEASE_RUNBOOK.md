@@ -17,6 +17,15 @@ pasted into acceptance artifacts.
 
 ## Preflight and release
 
+For local baseline verification with an existing stack or audit volume, run
+`make release-gate-isolated`. It runs the existing automated gate in a temporary source copy,
+omits local `.env` files, uses simulation providers and a separate Compose project with loopback
+ports, and disables model calls and outbound email in its services. Logs and synthetic results
+are saved under `artifacts/baseline/`; the test volume and source copy are retained, and only the
+isolated containers are stopped afterward. Existing provider-rehearsal artifacts are preserved
+and must be validated separately with `make release-evidence`. This does not perform a new
+Razorpay or recipient-delivery rehearsal.
+
 1. Copy `.env.example` into the deployment secret workflow and set every live-demo value. Generate
    `LEAKPROOF_OPERATOR_API_TOKEN` from at least 32 random bytes, scope
    `LEAKPROOF_OPERATOR_MERCHANT_IDS` to the demo merchant, and keep

@@ -4,6 +4,8 @@ PUBLIC_BUNDLE_CANARY := leakproof-release-browser-canary-2026-09-04
 ACCEPTANCE_ARTIFACT_DIR ?= artifacts/api-acceptance
 DEMO_RECORDING ?= artifacts/demo/leakproof-90s-backup.mp4
 
+.PHONY: release-gate-isolated
+
 install:
 	uv sync --extra dev
 	npm --prefix dashboard ci
@@ -74,6 +76,9 @@ release-gate-automated:
 
 release-gate: release-gate-automated
 	$(MAKE) release-evidence
+
+release-gate-isolated:
+	uv run python scripts/run_isolated_release.py
 
 test-august-27:
 	uv run pytest tests/test_diagnosis.py tests/test_guardrails.py tests/test_templates.py

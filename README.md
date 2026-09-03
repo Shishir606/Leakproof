@@ -36,6 +36,10 @@ These API and dashboard labels are not interchangeable.
 - Invoice, subscription, mandate, voice, Resend recipient delivery, and additional provider adapters
   remain simulated, preview-only, or architecture-ready exactly as labelled above.
 
+The post-release plan for turning checkout abandonment, invoice overdue, subscription halt, and
+broken mandates into evidence-gated Razorpay test-mode demos is documented in
+[`MULTI_SURFACE_RECOVERY_IMPLEMENTATION_PLAN.md`](MULTI_SURFACE_RECOVERY_IMPLEMENTATION_PLAN.md).
+
 ```text
 Razorpay webhook                                  Fixed-seed merchant simulator
       │ HMAC first                                5,000 customers · 12 months

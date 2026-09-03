@@ -4,10 +4,12 @@ import hashlib
 import hmac
 import json
 
-from sqlalchemy import func, select
+import pytest
+from sqlalchemy import func, select, text
 
 from leakproof.models.db import (
     Event,
+    Merchant,
     PaymentAttemptObservation,
     RecoveryCase,
     WebhookEvent,
@@ -174,6 +176,37 @@ def test_worker_redelivery_does_not_append_another_case_event(client, session_fa
         assert session.scalar(select(func.count()).select_from(RecoveryCase)) == 1
         assert session.scalar(select(func.count()).select_from(Event)) == 2
         assert session.get(WebhookEvent, webhook_id).processing_attempts == 1
+
+
+@pytest.mark.parametrize("payload", [
+    payment_failed("pay_first"),
+    payment_captured("pay_first", "order_first"),
+    order_paid("order_first"),
+], ids=["failed", "captured", "order_paid"])
+def test_first_payment_webhook_creates_merchant_before_observation(
+    client, session_factory, payload
+):
+    response = post_webhook(client, payload, "evt-first-merchant")
+    assert response.status_code == 200
+    webhook_id = response.json()["webhook_id"]
+    with session_factory() as session:
+        # Mirror the FK enforced by PostgreSQL without changing other SQLite fixtures.
+        session.execute(text("PRAGMA foreign_keys=ON"))
+        assert session.scalar(text("PRAGMA foreign_keys")) == 1
+        try:
+            assert session.get(Merchant, "merchant_test") is None
+            process_stored_webhook(session, webhook_id)
+            assert session.get(Merchant, "merchant_test") is not None
+            assert session.get(WebhookEvent, webhook_id).processed_at is not None
+            assert process_stored_webhook(session, webhook_id) is None
+            assert session.scalar(select(func.count()).select_from(PaymentAttemptObservation)) == 1
+            assert session.scalar(select(func.count()).select_from(RecoveryCase)) == (
+                1 if payload["event"] == "payment.failed" else 0
+            )
+        finally:
+            session.rollback()
+            session.execute(text("PRAGMA foreign_keys=OFF"))
+            session.commit()
 
 
 def test_duplicate_failure_payment_is_one_observed_attempt(client, session_factory):

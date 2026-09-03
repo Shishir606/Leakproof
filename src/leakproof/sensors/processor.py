@@ -22,7 +22,13 @@ from leakproof.sensors.normalizer import (
     normalize_razorpay_paid,
 )
 from leakproof.sensors.resend import process_stored_resend_webhook
-from leakproof.services import NormalizedSignal, PaidSignal, record_paid_signal, record_signal
+from leakproof.services import (
+    NormalizedSignal,
+    PaidSignal,
+    ensure_merchant,
+    record_paid_signal,
+    record_signal,
+)
 
 
 def _demo_for_order(session: Session, merchant_id: str, order_id: str | None) -> DemoSession | None:
@@ -63,7 +69,7 @@ def _bind_live_paid(signal: PaidSignal, demo: DemoSession) -> PaidSignal:
     return replace(signal, customer_id=demo.customer_id)
 
 
-def _promote_abandonment_case(
+def promote_abandonment_case(
     session: Session, case: RecoveryCase, signal: NormalizedSignal
 ) -> None:
     if case.leak_type != LeakType.CHECKOUT_ABANDON.value:
@@ -114,6 +120,7 @@ def _record_payment_attempt(session: Session, event: WebhookEvent) -> None:
     attempt = normalize_razorpay_attempt(event.merchant_id, event.payload, event.provider_event_key)
     if attempt is None:
         return
+    ensure_merchant(session, event.merchant_id)
     existing = session.scalar(
         select(PaymentAttemptObservation).where(
             PaymentAttemptObservation.merchant_id == attempt.merchant_id,
@@ -214,7 +221,7 @@ def process_stored_webhook(session: Session, webhook_id: int) -> str | None:
                 session.commit()
                 return None
             case, _ = record_signal(session, signal)
-            _promote_abandonment_case(session, case, signal)
+            promote_abandonment_case(session, case, signal)
             case_id = case.id
             if demo is not None:
                 if DemoSessionState(demo.state) != DemoSessionState.RECOVERED:

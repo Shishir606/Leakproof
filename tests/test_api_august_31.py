@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from leakproof.audit.timeline import replay_case
 from leakproof.config import Settings, get_settings
 from leakproof.demo import CheckoutEventRequest, DemoSessionCreateRequest, DemoSessionState
+from leakproof.demo.email import schedule_demo_recovery_email
 from leakproof.demo.rate_limit import InMemoryRateLimiter
 from leakproof.demo.security import issue_recovery_token
 from leakproof.demo.service import (
@@ -20,7 +21,8 @@ from leakproof.demo.service import (
     issue_demo_recovery_token,
     materialize_checkout_abandonment,
 )
-from leakproof.models.db import Action, DemoSession, Event, RecoveryCase
+from leakproof.diagnosis import diagnose_case
+from leakproof.models.db import Action, DemoSession, Diagnosis, Event, RecoveryCase
 from leakproof.providers import Payment
 from leakproof.providers.fakes import FakePaymentProvider
 from leakproof.sensors.processor import process_stored_webhook
@@ -138,6 +140,74 @@ def create_abandonment(session, created, provider, config) -> str:
     )
     assert case_id is not None
     return case_id
+
+
+def test_api_failure_after_abandonment_promotes_same_case_without_webhook(session_factory):
+    with session_factory() as session:
+        created, provider, config = create_session(session)
+        case_id = create_abandonment(session, created, provider, config)
+        diagnose_case(session, case_id)
+        email = schedule_demo_recovery_email(session, case_id, settings=config, now=NOW)
+        limiter = InMemoryRateLimiter()
+        for event_type, seconds in (("payment_attempt_started", 40), ("checkout_dismissed", 41)):
+            ingested = ingest_checkout_event(
+                session,
+                created.session_id,
+                CheckoutEventRequest(
+                    client_event_id=f"retry-{event_type}",
+                    event_type=event_type,
+                    occurred_at=NOW + timedelta(seconds=seconds),
+                ),
+                session_token=created.session_token,
+                limiter=limiter,
+                settings=config,
+                now=NOW + timedelta(seconds=seconds),
+            )
+        provider.payments["pay_retry_failed"] = Payment(
+            id="pay_retry_failed",
+            order_id=created.razorpay_order_id,
+            amount_paise=created.amount_paise,
+            currency=created.currency,
+            status="failed",
+            method="card",
+        )
+
+        for seconds in (71, 72):
+            assert materialize_checkout_abandonment(
+                session,
+                created.session_id,
+                ingested.dismissal_event_id,
+                provider=provider,
+                settings=config,
+                now=NOW + timedelta(seconds=seconds),
+            ) == case_id
+
+        case = session.get(RecoveryCase, case_id)
+        assert case.leak_type == "PAYMENT_FAILURE"
+        assert case.entity_id == "pay_retry_failed"
+        assert session.get(Diagnosis, case_id).evidence["source"] == "razorpay_payment_api"
+        assert session.scalar(select(func.count()).select_from(RecoveryCase)) == 1
+        assert session.scalar(
+            select(func.count()).select_from(Event).where(Event.kind == "RECLASSIFIED")
+        ) == 1
+        assert replay_case(session, case_id).projection_matches
+        assert schedule_demo_recovery_email(session, case_id, settings=config).id == email.id
+        assert session.scalar(select(func.count()).select_from(Action)) == 1
+
+        assert process_payload(
+            session,
+            config.default_merchant_id,
+            razorpay_payload(
+                "payment.captured",
+                created.razorpay_order_id,
+                occurred_at=NOW + timedelta(seconds=80),
+            ),
+            "evt-captured-after-api-promotion",
+        ) == case_id
+        assert case.state == "CLOSED"
+        assert case.outcome == "RECOVERED"
+        assert email.status == "cancelled"
+        assert replay_case(session, case_id).projection_matches
 
 
 def test_payment_failure_creates_one_live_case_and_duplicate_has_one_effect(session_factory):

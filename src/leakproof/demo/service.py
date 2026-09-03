@@ -48,6 +48,7 @@ from leakproof.models.db import (
 )
 from leakproof.models.domain import Arm, LeakType
 from leakproof.providers import CreateOrderRequest, PaymentProvider, ProviderError
+from leakproof.sensors.processor import promote_abandonment_case
 from leakproof.services import (
     NormalizedSignal,
     PaidSignal,
@@ -762,11 +763,10 @@ def materialize_checkout_abandonment(
             ),
         )
     )
-    if existing is not None:
-        if existing.leak_type == LeakType.PAYMENT_FAILURE.value:
-            demo.state = DemoSessionState.AT_RISK.value
-            demo.updated_at = now
-            session.commit()
+    if existing is not None and existing.leak_type == LeakType.PAYMENT_FAILURE.value:
+        demo.state = DemoSessionState.AT_RISK.value
+        demo.updated_at = now
+        session.commit()
         return existing.id
 
     started = time.perf_counter()
@@ -839,6 +839,12 @@ def materialize_checkout_abandonment(
             dedupe_key_override=key,
             arm_override=Arm.TREATMENT,
         )
+    elif existing is not None:
+        # A repeated dismissal without new payment failure retains the original audit.
+        demo.state = DemoSessionState.AT_RISK.value
+        demo.updated_at = now
+        session.commit()
+        return existing.id
     else:
         signal = NormalizedSignal(
             merchant_id=demo.merchant_id,
@@ -862,6 +868,8 @@ def materialize_checkout_abandonment(
             arm_override=Arm.TREATMENT,
         )
     case, _ = record_signal(session, signal)
+    if signal.leak_type == LeakType.PAYMENT_FAILURE:
+        promote_abandonment_case(session, case, signal)
     assert_session_transition(DemoSessionState(demo.state), DemoSessionState.AT_RISK)
     demo.state = DemoSessionState.AT_RISK.value
     demo.updated_at = now
