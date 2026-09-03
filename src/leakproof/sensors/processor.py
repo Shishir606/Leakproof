@@ -20,6 +20,7 @@ from leakproof.sensors.normalizer import (
     normalize_razorpay,
     normalize_razorpay_attempt,
     normalize_razorpay_paid,
+    normalize_razorpay_state,
 )
 from leakproof.sensors.resend import process_stored_resend_webhook
 from leakproof.services import (
@@ -189,6 +190,12 @@ def process_stored_webhook(session: Session, webhook_id: int) -> str | None:
     event.processing_attempts += 1
     try:
         _record_payment_attempt(session, event)
+        state_signal = normalize_razorpay_state(event.merchant_id, event.payload)
+        if state_signal:
+            from leakproof.provider_resources import record_state
+
+            ensure_merchant(session, event.merchant_id)
+            record_state(session, state_signal)
         paid = normalize_razorpay_paid(event.merchant_id, event.payload)
         signal = normalize_razorpay(event.merchant_id, event.payload)
         case_id: str | None = None
@@ -221,6 +228,11 @@ def process_stored_webhook(session: Session, webhook_id: int) -> str | None:
                 session.commit()
                 return None
             case, _ = record_signal(session, signal)
+            if case is None:
+                event.processed_at = datetime.now(UTC)
+                event.last_error = None
+                session.commit()
+                return None
             promote_abandonment_case(session, case, signal)
             case_id = case.id
             if demo is not None:

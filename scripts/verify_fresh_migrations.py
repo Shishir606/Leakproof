@@ -1,4 +1,4 @@
-"""Apply every migration twice to a disposable PostgreSQL release database."""
+"""Verify fresh and frozen-0010 upgrades on disposable PostgreSQL databases."""
 
 from __future__ import annotations
 
@@ -62,7 +62,13 @@ def main() -> int:
             f"fresh and reused migration passes succeeded at {revision} "
             f"with {table_count} public tables"
         )
-        return 0
+        upgrade_environment = environment.copy()
+        upgrade_environment["LEAKPROOF_TEST_POSTGRES_ADMIN_URL"] = args.admin_url
+        return subprocess.run(
+            ["uv", "run", "pytest", "tests/test_multi_resource_migrations.py", "-q"],
+            env=upgrade_environment,
+            check=False,
+        ).returncode
     finally:
         with admin.connect() as connection:
             connection.execute(

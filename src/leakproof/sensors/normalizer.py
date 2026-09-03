@@ -12,7 +12,7 @@ def _entity(payload: dict, name: str) -> dict:
 
 
 def _occurred_at(payload: dict, entity: dict) -> datetime:
-    value = entity.get("created_at") or payload.get("created_at")
+    value = payload.get("created_at") or entity.get("created_at")
     return (
         datetime.fromtimestamp(value, UTC) if isinstance(value, int | float) else datetime.now(UTC)
     )
@@ -86,6 +86,13 @@ def normalize_razorpay(merchant_id: str, payload: dict) -> NormalizedSignal | No
     event = payload.get("event")
     if event == "payment.failed":
         entity = _entity(payload, "payment")
+        if (
+            entity.get("invoice_id")
+            or entity.get("subscription_id")
+            or _entity(payload, "invoice")
+            or _entity(payload, "subscription")
+        ):
+            return None  # explicit invoice/cycle reconciliation belongs to the later surface
         card = entity.get("card") if isinstance(entity.get("card"), dict) else {}
         entity_id = str(entity["id"])
         order_id = entity.get("order_id")
@@ -124,28 +131,7 @@ def normalize_razorpay(merchant_id: str, payload: dict) -> NormalizedSignal | No
             occurred_at=_occurred_at(payload, entity),
         )
 
-    mapping = {
-        "subscription.halted": ("subscription", LeakType.SUBSCRIPTION_HALT),
-        "subscription.pending": ("subscription", LeakType.SUBSCRIPTION_HALT),
-    }
-    if event in mapping:
-        envelope, leak_type = mapping[event]
-        entity = _entity(payload, envelope)
-        entity_id = str(entity["id"])
-        customer_id = str(entity.get("customer_id") or f"anonymous:{entity_id}")
-        return NormalizedSignal(
-            merchant_id=merchant_id,
-            customer_id=customer_id,
-            leak_type=leak_type,
-            entity_type=envelope,
-            entity_id=entity_id,
-            entity_root_id=None,
-            amount_at_risk=int(entity.get("current_end_amount", entity.get("amount", 0))),
-            currency=str(entity.get("currency", "INR")),
-            evidence={"status": entity.get("status"), "cycle_number": entity.get("paid_count", 0)},
-            occurred_at=_occurred_at(payload, entity),
-        )
-
+    # Subscription state is normalized separately; paid_count is not a cycle identity.
     # Success events are normalized separately so they cannot create leak cases.
     return None
 
@@ -154,6 +140,13 @@ def normalize_razorpay_paid(merchant_id: str, payload: dict) -> PaidSignal | Non
     event = payload.get("event")
     if event == "payment.captured":
         entity = _entity(payload, "payment")
+        if (
+            entity.get("invoice_id")
+            or entity.get("subscription_id")
+            or _entity(payload, "invoice")
+            or _entity(payload, "subscription")
+        ):
+            return None
         entity_id = str(entity["id"])
         order_id = entity.get("order_id")
         customer_id = entity.get("customer_id") or entity.get("notes", {}).get("customer_id")
@@ -169,6 +162,13 @@ def normalize_razorpay_paid(merchant_id: str, payload: dict) -> PaidSignal | Non
         )
     if event == "order.paid":
         entity = _entity(payload, "order")
+        if (
+            entity.get("invoice_id")
+            or entity.get("subscription_id")
+            or _entity(payload, "invoice")
+            or _entity(payload, "subscription")
+        ):
+            return None
         entity_id = str(entity["id"])
         customer_id = entity.get("customer_id") or entity.get("notes", {}).get("customer_id")
         return PaidSignal(
@@ -182,3 +182,25 @@ def normalize_razorpay_paid(merchant_id: str, payload: dict) -> PaidSignal | Non
             occurred_at=_occurred_at(payload, entity),
         )
     return None
+
+
+def normalize_razorpay_state(merchant_id: str, payload: dict):
+    """Non-monetary recurring state. No cycle inferred from counters or amount."""
+    from leakproof.models.resources import EntityRef, EntityStateSignal, ProviderScope
+
+    states = {
+        "subscription.pending": "pending",
+        "subscription.halted": "halted",
+        "subscription.activated": "active",
+        "subscription.cancelled": "cancelled",
+    }
+    if payload.get("event") not in states:
+        return None
+    subscription = _entity(payload, "subscription")
+    return EntityStateSignal(
+        scope=ProviderScope(merchant_id=merchant_id),
+        entity=EntityRef(entity_type="subscription", entity_id=subscription["id"]),
+        source="razorpay_webhook",
+        occurred_at=_occurred_at(payload, subscription),
+        state=states[payload["event"]],
+    )

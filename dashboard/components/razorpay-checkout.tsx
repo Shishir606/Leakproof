@@ -1,12 +1,15 @@
 "use client";
 
+import Link from "next/link";
+import { useSessionProjection } from "@/lib/use-session-projection";
+import { AbandonmentStatus } from "@/components/abandonment-status";
+import { deliverTelemetry, flushTelemetry } from "@/lib/checkout-telemetry";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createSession,
   DemoApiError,
   getRecoveryBootstrap,
-  sendCheckoutEvent,
   verifyCheckoutPayment,
 } from "@/lib/demo-api";
 import type {
@@ -21,7 +24,6 @@ import type {
 const SDK_URL = "https://checkout.razorpay.com/v1/checkout.js";
 const SDK_ID = "razorpay-checkout-sdk";
 const SESSION_STORAGE_KEY = "leakproof:active-demo-session";
-const TELEMETRY_PREFIX = "leakproof:checkout-events:";
 let sdkPromise: Promise<void> | undefined;
 
 type CheckoutState = "idle" | "preparing" | "open" | "failed" | "completed";
@@ -71,50 +73,6 @@ function loadCheckoutSdk(): Promise<void> {
     }
   });
   return sdkPromise;
-}
-
-function telemetryKey(sessionId: string) {
-  return `${TELEMETRY_PREFIX}${sessionId}`;
-}
-
-function readQueued(sessionId: string): CheckoutEvent[] {
-  try {
-    return JSON.parse(localStorage.getItem(telemetryKey(sessionId)) ?? "[]") as CheckoutEvent[];
-  } catch {
-    return [];
-  }
-}
-
-function persistQueued(sessionId: string, events: CheckoutEvent[]) {
-  if (events.length) localStorage.setItem(telemetryKey(sessionId), JSON.stringify(events));
-  else localStorage.removeItem(telemetryKey(sessionId));
-}
-
-async function deliverTelemetry(session: DemoSession, event: CheckoutEvent) {
-  // Persist first: a retry after navigation reuses the same client_event_id.
-  const queued = readQueued(session.session_id);
-  if (!queued.some((item) => item.client_event_id === event.client_event_id)) {
-    persistQueued(session.session_id, [...queued, event]);
-  }
-  try {
-    await sendCheckoutEvent(session, event);
-    persistQueued(
-      session.session_id,
-      readQueued(session.session_id).filter(
-        (item) => item.client_event_id !== event.client_event_id,
-      ),
-    );
-    return true;
-  } catch {
-    // The server endpoint is idempotent. The exact persisted event is retried on resume.
-    return false;
-  }
-}
-
-async function flushTelemetry(session: DemoSession) {
-  for (const event of readQueued(session.session_id)) {
-    await deliverTelemetry(session, event);
-  }
 }
 
 function newTelemetry(
@@ -181,6 +139,7 @@ function openCheckout({
 }) {
   if (!window.Razorpay) throw new Error("Razorpay Checkout is not available.");
   let completed = false;
+  let dismissed = false;
   let attemptId = eventId();
   const track = (event: CheckoutEvent) => {
     if (session) void deliverTelemetry(session, event);
@@ -231,29 +190,34 @@ function openCheckout({
       confirm_close: true,
       escape: true,
       ondismiss: () => {
-        if (completed) return;
+        if (completed || dismissed) return;
+        dismissed = true;
         setState("idle");
         setMessage("Checkout closed. We’ll re-check the original order before opening a recovery case.");
-        track(newTelemetry("checkout_dismissed", { dismissed_by: "customer" }));
+        track(newTelemetry("checkout_dismissed", { dismissed_by: "customer", attempt_id: attemptId }));
       },
     },
   };
   const instance = new window.Razorpay(options);
   instance.on("payment.submit", () => {
     attemptId = eventId();
+    dismissed = false;
     setMessage("Payment attempt started. Only server-verified Razorpay truth can close the case.");
     track(newTelemetry("payment_attempt_started", { attempt_id: attemptId }));
   });
   instance.on("payment.failed", (response) => {
     setState("failed");
     setMessage(failureMessage(response));
-    track(newTelemetry("checkout_dismissed", { dismissed_by: "browser" }));
+    if (!dismissed) {
+      dismissed = true;
+      track(newTelemetry("checkout_dismissed", { dismissed_by: "browser", attempt_id: attemptId }));
+    }
     onOutcome("failed");
   });
+  track(newTelemetry("checkout_opened", { sdk_version: "v1", attempt_id: attemptId }));
   instance.open();
   setState("open");
   setMessage(recovery ? "Recovery Checkout opened for the original order." : "Secure Checkout opened.");
-  track(newTelemetry("checkout_opened", { sdk_version: "v1" }));
 }
 
 function CheckoutStatus({ state, message }: { state: CheckoutState; message: string }) {
@@ -281,10 +245,12 @@ function OrderReceipt({ checkout, recovered }: { checkout: PublicCheckout; recov
 export function DemoCheckout() {
   const router = useRouter();
   const [recipient, setRecipient] = useState("");
+  const [scenario, setScenario] = useState<"CHECKOUT_ABANDON" | "PAYMENT_FAILURE">("CHECKOUT_ABANDON");
   const [session, setSession] = useState<DemoSession>();
   const [state, setState] = useState<CheckoutState>("idle");
   const [message, setMessage] = useState("A fixed ₹500 test order will be created on the server.");
   const preparing = useRef(false);
+  const { projection, error: projectionError, expired } = useSessionProjection(session);
 
   useEffect(() => {
     try {
@@ -293,11 +259,13 @@ export function DemoCheckout() {
       const active = JSON.parse(stored) as DemoSession;
       if (new Date(active.expires_at).getTime() > Date.now()) {
         setSession(active);
+        setScenario(active.scenario_type === "CHECKOUT_ABANDON" ? "CHECKOUT_ABANDON" : "PAYMENT_FAILURE");
         setMessage("Your unexpired test order is ready to resume.");
         void flushTelemetry(active);
       } else {
         sessionStorage.removeItem(SESSION_STORAGE_KEY);
-        persistQueued(active.session_id, []);
+        localStorage.removeItem(`leakproof:checkout-events:${active.session_id}`);
+        setMessage("Your previous session expired. Create a new test order to rehearse again.");
       }
     } catch {
       sessionStorage.removeItem(SESSION_STORAGE_KEY);
@@ -311,9 +279,9 @@ export function DemoCheckout() {
     setMessage(session ? "Resuming your existing order…" : "Creating one fixed test order…");
     try {
       const active =
-        session && new Date(session.expires_at).getTime() > Date.now()
+        session && !expired && new Date(session.expires_at).getTime() > Date.now()
           ? session
-          : await createSession(recipient.trim() || undefined);
+          : await createSession(recipient.trim() || undefined, scenario);
       if (!session || active.session_id !== session.session_id) {
         sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(active));
         setSession(active);
@@ -334,7 +302,7 @@ export function DemoCheckout() {
     } finally {
       preparing.current = false;
     }
-  }, [recipient, router, session]);
+  }, [recipient, router, session, scenario, expired]);
 
   return (
     <div className="checkout-card">
@@ -343,6 +311,12 @@ export function DemoCheckout() {
         <h2>Open a real Razorpay test Checkout.</h2>
         <p>Dismiss it, trigger a test failure, or complete it. Leakproof records bounded browser signals while server-verified Razorpay sandbox truth decides payment success.</p>
       </div>
+      <fieldset className="checkout-scenarios" disabled={Boolean(session) && !expired}>
+        <legend>Choose a rehearsal</legend>
+        <label><input type="radio" name="scenario" checked={scenario === "CHECKOUT_ABANDON"} onChange={() => setScenario("CHECKOUT_ABANDON")} /> Checkout abandonment</label>
+        <label><input type="radio" name="scenario" checked={scenario === "PAYMENT_FAILURE"} onChange={() => setScenario("PAYMENT_FAILURE")} /> Payment failure</label>
+      </fieldset>
+      <p>{scenario === "CHECKOUT_ABANDON" ? "Open Checkout, close it without paying, then watch the waiting and provider recheck below. Continue recovery once the original order is confirmed unpaid." : "Use a Razorpay test failure, then follow the recovery case. Provider-confirmed failure takes precedence over dismissal."}</p>
       <label className="checkout-field">
         <span>Recovery email <small>optional</small></span>
         <input
@@ -351,16 +325,22 @@ export function DemoCheckout() {
           onChange={(event) => setRecipient(event.target.value)}
           placeholder="reviewer@example.com"
           autoComplete="email"
-          disabled={Boolean(session)}
+          disabled={Boolean(session) && !expired}
         />
         <small>Only allowlisted addresses receive mail. Others stay preview-only.</small>
       </label>
       {session && <OrderReceipt checkout={session} />}
-      <button className="checkout-primary" type="button" onClick={start} disabled={state === "preparing" || state === "open"}>
-        {state === "preparing" ? "Preparing secure Checkout…" : session ? "Resume Checkout" : "Create test order & open Checkout"}
+      <button className="checkout-primary" type="button" onClick={start} disabled={state === "preparing" || (!expired && (state === "open" || projection?.state === "RECOVERED" || Boolean(projection?.recovery_path)))}>
+        {state === "preparing" ? "Preparing secure Checkout…" : expired ? "Start a new rehearsal" : session ? "Resume Checkout" : scenario === "CHECKOUT_ABANDON" ? "Start checkout abandonment" : "Create test order & open Checkout"}
         <span aria-hidden="true">→</span>
       </button>
       <CheckoutStatus state={state} message={message} />
+      {expired && <p role="status">Session expired. Recovery is disabled; start a new rehearsal.</p>}
+      {!expired && projectionError && <p role="status">Status delayed: {projectionError}</p>}
+      {!expired && projection && <AbandonmentStatus check={projection.abandonment_check} />}
+      {!expired && projection?.recovery_path && <Link className="checkout-primary" href={projection.recovery_path}>Continue recovery →</Link>}
+      {session && <Link className="checkout-secondary" href="/">Watch the live dashboard →</Link>}
+
       <p className="checkout-fineprint">Test mode only · Amount and currency are fixed server-side · No automatic charge</p>
     </div>
   );
@@ -394,11 +374,23 @@ export function RecoveryCheckout({ token }: { token: string }) {
     void prepare();
   }, [prepare]);
 
-  const reopen = () => {
-    if (!bootstrap) return;
+  const reopen = async () => {
+    if (!bootstrap || loading.current) return;
+    loading.current = true;
+    setState("preparing");
+    setMessage("Rechecking the original order with Razorpay…");
     try {
+      const fresh = await getRecoveryBootstrap(token);
+      setBootstrap(fresh);
+      let active: DemoSession | undefined;
+      try {
+        const stored = JSON.parse(sessionStorage.getItem(SESSION_STORAGE_KEY) ?? "null") as DemoSession | null;
+        if (stored?.session_id === fresh.session_id) active = stored;
+      } catch { /* A recovery link works without browser session storage. */ }
+      if (active) await flushTelemetry(active);
       openCheckout({
-        checkout: bootstrap,
+        checkout: fresh,
+        session: active,
         verificationAuthorization: { recoveryToken: token },
         recovery: true,
         setState,
@@ -408,6 +400,9 @@ export function RecoveryCheckout({ token }: { token: string }) {
     } catch (error) {
       setState("failed");
       setMessage(errorMessage(error));
+      setBootstrap(undefined);
+    } finally {
+      loading.current = false;
     }
   };
 

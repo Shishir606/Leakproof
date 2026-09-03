@@ -7,17 +7,23 @@ from leakproof.providers.contracts import (
     CohortAnalysisProvider,
     CohortAnalysisRequest,
     CohortAnalysisResult,
+    CreateInvoiceRequest,
     CreateOrderRequest,
+    CreateSubscriptionRequest,
     EmailProvider,
     EmailSendRequest,
     EmailSendResult,
+    Invoice,
+    InvoiceProvider,
     Payment,
     PaymentOrder,
     PaymentProvider,
     ProviderError,
+    Subscription,
+    SubscriptionProvider,
 )
 from leakproof.providers.openai import OpenAICaseInsightProvider, OpenAICohortAnalysisProvider
-from leakproof.providers.razorpay import RazorpayPaymentProvider
+from leakproof.providers.razorpay import RazorpayPaymentProvider, RazorpayProvider
 from leakproof.providers.resend import ResendEmailProvider
 
 __all__ = [
@@ -27,14 +33,21 @@ __all__ = [
     "CohortAnalysisProvider",
     "CohortAnalysisRequest",
     "CohortAnalysisResult",
+    "CreateInvoiceRequest",
     "CreateOrderRequest",
+    "CreateSubscriptionRequest",
     "EmailProvider",
+    "Invoice",
+    "InvoiceProvider",
     "EmailSendRequest",
     "EmailSendResult",
     "Payment",
     "PaymentOrder",
     "PaymentProvider",
     "ProviderError",
+    "Subscription",
+    "SubscriptionProvider",
+    "RazorpayProvider",
     "RazorpayPaymentProvider",
     "OpenAICaseInsightProvider",
     "OpenAICohortAnalysisProvider",

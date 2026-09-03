@@ -457,6 +457,8 @@ def create_demo_session_route(
     limiter: DemoRateLimiterDep,
 ) -> DemoSessionCreated | JSONResponse:
     settings = get_settings()
+    if payload.scenario_type not in {LeakType.PAYMENT_FAILURE, LeakType.CHECKOUT_ABANDON}:
+        return contract_error(409, "scenario_not_implemented", "This scenario is not available yet")
     if not settings.demo_sessions_enabled:
         return contract_error(
             503,
@@ -1053,3 +1055,10 @@ def scoreboard_exceptions(
 ) -> ExceptionReport:
     _scoped_batch(session, run_id, principal)
     return exception_report(session, run_id)
+
+
+@app.get("/demo/scenarios")
+def demo_scenarios():
+    from leakproof.demo.contracts import SCENARIO_CAPABILITIES
+
+    return SCENARIO_CAPABILITIES

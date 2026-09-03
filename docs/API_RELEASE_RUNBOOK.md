@@ -200,3 +200,96 @@ migrated schema; database downgrade is not part of the incident path.
   requires merchant-scoped OAuth/RBAC, rotation, and an authenticated operator surface.
 - Invoice, subscription, mandate, voice, Resend recipient delivery, and other provider integrations
   remain simulated, preview-only, or architecture-ready as labelled in the capability matrix.
+
+## Track A — current checkout-abandonment acceptance
+
+Code and automated contract checks are complete. **Fresh provider rehearsal is pending.**
+The existing September 1 provider exports remain historical evidence. Do not relabel the new
+synthetic contract captures as real Razorpay payments.
+
+### Repeatable automated checks
+
+`make track-a-contract` extends the existing August 30/31 and September 2/4 backend suites and
+artifact validator. It writes two sanitized **SIMULATED_END_TO_END** exports to
+`artifacts/track-a/contract/`, using the existing fake providers. No account credentials or network
+payments are used. The tests also cover stale/equal-time events, broker retry, provider failure,
+expiry, failure precedence, original-order reuse, pending-contact cancellation, and audit replay.
+
+For browser contract checks, start a local dashboard on an unused port with its backend pointed
+at a closed loopback port, then run the capture in a second terminal:
+
+```bash
+API_BASE_URL=http://127.0.0.1:9 npm --prefix dashboard run dev -- --hostname 127.0.0.1 --port 3100
+```
+
+```bash
+uv run playwright install chromium
+make track-a-contract track-a-browser
+```
+
+The browser check intercepts API and Checkout SDK responses, blocks external browser requests,
+uses the real application components, and writes watermarked desktop/mobile screenshots and
+`summary.json` to `artifacts/track-a/browser/`. It tests queue replay after refresh, duplicate close
+callbacks, waiting/retry/pending displays, original-order checks on every recovery click, same-case
+completion, export, failure precedence, stale recovery and expiry. These are **browser contract
+fixtures**, not provider-payment evidence. `TRACK_A_BROWSER_URL` can select another local port.
+The separate PostgreSQL regression reuses fresh/upgraded disposable database fixtures:
+
+```bash
+LEAKPROOF_TEST_POSTGRES_ADMIN_URL=postgresql+psycopg://leakproof:leakproof@localhost:55432/postgres \
+  uv run pytest tests/test_multi_resource_migrations.py -k track_a
+```
+
+### Exact human Razorpay test-mode rehearsal
+
+1. Load this working tree into the local demo with `make up` when ready to update the existing
+   application. This builds the API/dashboard, applies the forward migrations, and starts the
+   worker and Beat. Use the already configured `live_demo` environment with `rzp_test_` credentials;
+   the isolated browser-check server on port 3100 is not the provider demo. This implementation
+   step did not update or restart the existing deployment.
+2. Open `http://localhost:3000/demo`. If an older session is active, use **Live dashboard → Start a
+   new demo**, which returns to the scenario chooser before creating another order. A fresh private browser
+   window also starts without an older session selection.
+3. Select **Checkout abandonment**, leave recovery email blank for preview-only contact, and click
+   **Start checkout abandonment**. Note the order suffix; the amount must remain ₹500.
+4. Close the Razorpay modal without attempting payment; confirm the modal's close prompt. Observe
+   **Dismissal recorded · recheck in …s**, followed by **Waiting for provider recheck** if the
+   provider read has not finished. The default wait is 7 seconds; scheduled rescue runs every 15
+   seconds. Refresh once: the same session/order and persisted wait must return. A provider error
+   must show **Provider recheck delayed · retry scheduled**, not a confirmed abandonment.
+5. Wait for **Abandonment confirmed · original order unpaid**, then click **Continue recovery**.
+   Check that the order suffix and ₹500 amount match. Click **Continue original order**; this
+   performs a fresh provider check before opening Checkout.
+6. In Razorpay Test Mode, choose **Netbanking**, select any available bank, continue to the mock
+   bank page, and choose **Success**. Alternatively use the currently documented domestic Visa
+   test card **4100 2800 0000 1007**, a future expiry such as **12/30**, and any test CVV such as
+   **123**, then choose **Success** on the mock page. Use only test details. These steps were checked
+   against [Razorpay's Standard Checkout test-integration instructions](https://razorpay.com/docs/payments/payment-gateway/web-integration/standard/integration-steps/)
+   on 2026-09-03. Do not treat the mock-page click as application payment evidence: the server must
+   still verify the signed result and captured amount/currency against the original order.
+7. On the Live dashboard, verify **Payment verified · recovery complete**, the same case closed,
+   exactly ₹500 recovered for this session, and no pending email. Contact may be previewed already
+   or cancelled if recovery finished before dispatch. No recipient-delivery claim follows from
+   preview/cancellation. If capture is still pending, retain that state; do not manually close a case.
+8. Click **Download acceptance evidence** before session expiry. Save under a new filename such as
+   `artifacts/api-acceptance/track-a-current-checkout-abandon.json`, preserving historical files.
+   Require `passed: true`, `case.leak_type: CHECKOUT_ABANDON`,
+   `session.scenario_type: CHECKOUT_ABANDON`, and
+   `data_provenance: LIVE_TELEMETRY_PROVIDER_RECONCILED`. The new checks require browser dismissal,
+   a successful unpaid-order recheck, and original-order recovery bootstrap. Payment failure takes
+   precedence if a failed attempt occurs: keep that evidence and start a fresh abandonment run.
+9. Validate the new file without mixing it with the legacy two-file release gate:
+
+   ```bash
+   uv run python scripts/validate_acceptance_artifacts.py \
+     artifacts/api-acceptance/track-a-current-checkout-abandon.json --require-live
+   ```
+
+The CLI capture remains available; add `--scenario-type CHECKOUT_ABANDON` to the existing protected
+session-token command above. The browser download requires no copying of session tokens. Incomplete
+exports retain failed checks. A transient provider failure followed by a successful retry is advisory;
+an unresolved latest failure remains blocking. If the session expires, recovery and telemetry stop,
+pending email is cancelled when dispatched, and a new rehearsal must be started.
+
+**Provider status: PENDING.** No human Razorpay payment, current live acceptance export, or new
+recipient-delivery proof was produced by this implementation step.

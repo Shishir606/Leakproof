@@ -96,3 +96,22 @@ def test_acceptance_artifact_validator_rejects_missing_day4_check(tmp_path):
 
     with pytest.raises(ValueError, match="missing required checks"):
         validator.validate_file(path, require_live=True)
+
+
+def test_telemetry_reconciled_capture_requires_abandonment_evidence(tmp_path):
+    payload = _artifact()
+    payload["data_provenance"] = "LIVE_TELEMETRY_PROVIDER_RECONCILED"
+    path = tmp_path / "telemetry.json"
+    path.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="missing required checks"):
+        validator.validate_file(path, require_live=True)
+    payload["checks"].extend(
+        {"check": check, "passed": True, "severity": "blocking", "detail": "contract assertion"}
+        for check in validator.ABANDONMENT_CHECKS
+    )
+    path.write_text(json.dumps(payload))
+    assert validator.validate_file(path, require_live=True).passed
+    payload["data_provenance"] = "SIMULATED_END_TO_END"
+    path.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="not live provider evidence"):
+        validator.validate_file(path, require_live=True)

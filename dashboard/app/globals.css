@@ -585,3 +585,9 @@ button, select, input { font: inherit; }
   .assumptions-grid, .assumption-lists { grid-template-columns: 1fr; }
   .assumption-lists ul { columns: 1; }
 }
+
+.checkout-scenarios { border: 1px solid #d5dedb; border-radius: 12px; padding: 14px; display: flex; gap: 16px; flex-wrap: wrap; }
+.checkout-scenarios legend { padding: 0 6px; font-weight: 600; }
+.checkout-scenarios label { display: flex; gap: 6px; align-items: center; font-size: 14px; }
+.abandonment-status { border: 1px solid #b6cfc5; border-radius: 12px; background: #eff8f4; color: #254c3e; padding: 18px; margin: 18px 0; }
+.abandonment-status p { font-size: 14px; line-height: 1.55; margin: 6px 0 0; }

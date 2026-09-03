@@ -342,8 +342,8 @@ def test_provider_payment_state_prevents_false_abandonment(session_factory, paym
     provider = FakePaymentProvider()
     with session_factory() as session:
         created, _, limiter, settings = create_session(session, provider=provider)
-        provider.payments["pay-existing"] = Payment(
-            id="pay-existing",
+        provider.payments["pay_existing"] = Payment(
+            id="pay_existing",
             order_id=created.razorpay_order_id,
             amount_paise=created.amount_paise,
             currency="INR",
@@ -379,8 +379,8 @@ def test_provider_api_failed_payment_creates_payment_failure_without_webhook(
     provider = FakePaymentProvider()
     with session_factory() as session:
         created, _, limiter, settings = create_session(session, provider=provider)
-        provider.payments["pay-existing-failure"] = Payment(
-            id="pay-existing-failure",
+        provider.payments["pay_existing_failure"] = Payment(
+            id="pay_existing_failure",
             order_id=created.razorpay_order_id,
             amount_paise=created.amount_paise,
             currency="INR",
@@ -459,3 +459,226 @@ def test_later_attempt_invalidates_dismissal_and_rescue_scan(session_factory):
             )
             is None
         )
+
+
+@pytest.mark.parametrize(
+    "later_type",
+    ["checkout_opened", "payment_attempt_started", "checkout_completed", "checkout_dismissed"],
+)
+def test_stale_worker_uses_receipt_sequence_even_at_equal_timestamps(session_factory, later_type):
+    with session_factory() as session:
+        created, provider, limiter, settings = create_session(session)
+        first = ingest_checkout_event(
+            session,
+            created.session_id,
+            checkout_event("checkout_dismissed", "old-dismissal"),
+            session_token=created.session_token,
+            limiter=limiter,
+            settings=settings,
+            now=NOW,
+        )
+        later = ingest_checkout_event(
+            session,
+            created.session_id,
+            checkout_event(later_type, "new-event"),
+            session_token=created.session_token,
+            limiter=limiter,
+            settings=settings,
+            now=NOW,
+        )
+        due = NOW + timedelta(seconds=31)
+        assert (
+            materialize_checkout_abandonment(
+                session,
+                created.session_id,
+                first.dismissal_event_id,
+                provider=provider,
+                settings=settings,
+                now=due,
+            )
+            is None
+        )
+        assert due_abandonment_checks(session, settings=settings, now=due) == (
+            [(created.session_id, later.dismissal_event_id)]
+            if later_type == "checkout_dismissed"
+            else []
+        )
+        assert session.scalar(select(func.count()).select_from(RecoveryCase)) == 0
+
+
+def test_retry_projection_and_redispatch_survive_refresh_and_provider_failure(session_factory):
+    from leakproof.demo.projection import get_demo_session_projection
+
+    with session_factory() as session:
+        created, provider, limiter, settings = create_session(session)
+        dismissed = ingest_checkout_event(
+            session,
+            created.session_id,
+            checkout_event("checkout_dismissed", "retry-dismissal"),
+            session_token=created.session_token,
+            limiter=limiter,
+            settings=settings,
+            now=NOW,
+        )
+    # A fresh DB session is the refresh boundary; waiting derives from persisted receipt time.
+    with session_factory() as session:
+
+        def projection(seconds):
+            return get_demo_session_projection(
+                session,
+                created.session_id,
+                session_token=created.session_token,
+                settings=settings,
+                now=NOW + timedelta(seconds=seconds),
+            )
+
+        assert projection(1).abandonment_check.status == "waiting"
+        assert projection(1).abandonment_check.due_at == NOW + timedelta(seconds=30)
+        assert projection(31).abandonment_check.status == "provider_recheck"
+        provider.failure = ProviderError(
+            provider="razorpay",
+            operation="list_order_payments",
+            error_class="timeout",
+            retryable=True,
+            message="contract timeout",
+        )
+        with pytest.raises(ProviderError):
+            materialize_checkout_abandonment(
+                session,
+                created.session_id,
+                dismissed.dismissal_event_id,
+                provider=provider,
+                settings=settings,
+                now=NOW + timedelta(seconds=31),
+            )
+        assert projection(32).abandonment_check.status == "provider_retry"
+        assert projection(32).case is None
+        assert due_abandonment_checks(session, settings=settings, now=NOW + timedelta(seconds=32))
+        provider.failure = None
+        case_id = materialize_checkout_abandonment(
+            session,
+            created.session_id,
+            dismissed.dismissal_event_id,
+            provider=provider,
+            settings=settings,
+            now=NOW + timedelta(seconds=33),
+        )
+        before_calls = session.scalar(select(func.count()).select_from(ProviderCall))
+        assert (
+            materialize_checkout_abandonment(
+                session,
+                created.session_id,
+                dismissed.dismissal_event_id,
+                provider=provider,
+                settings=settings,
+                now=NOW + timedelta(seconds=34),
+            )
+            == case_id
+        )
+        assert session.scalar(select(func.count()).select_from(ProviderCall)) == before_calls
+        assert not due_abandonment_checks(
+            session, settings=settings, now=NOW + timedelta(seconds=35)
+        )
+        assert projection(35).abandonment_check.status == "confirmed"
+        assert projection(35).abandonment_check.unpaid_confirmed
+        assert projection(35).data_provenance == "SIMULATED_END_TO_END"
+        live_config = settings.model_copy(update={"mode": "live_demo"})
+        # Verify label selection only; this is still fake-provider test data, never exported live.
+        assert (
+            get_demo_session_projection(
+                session,
+                created.session_id,
+                session_token=created.session_token,
+                settings=live_config,
+                now=NOW + timedelta(seconds=35),
+            ).data_provenance
+            == "LIVE_TELEMETRY_PROVIDER_RECONCILED"
+        )
+
+
+def test_scheduled_rescue_recovers_failed_broker_handoff_once(client, session_factory, monkeypatch):
+    import importlib
+
+    tasks = importlib.import_module("leakproof.celery_app")
+
+    def unavailable(**kwargs):
+        raise ConnectionError("contract broker unavailable")
+
+    monkeypatch.setattr("leakproof.api.app.check_demo_abandonment.apply_async", unavailable)
+    created = client.post("/demo/sessions", json={"scenario_type": "CHECKOUT_ABANDON"}).json()
+    response = client.post(
+        f"/demo/sessions/{created['session_id']}/checkout-events",
+        headers={"x-leakproof-session-token": created["session_token"]},
+        json={
+            "client_event_id": "broker-dismiss",
+            "event_type": "checkout_dismissed",
+            "occurred_at": datetime.now(UTC).isoformat(),
+            "metadata": {},
+        },
+    )
+    assert response.status_code == 200
+    event_id = response.json()["event_id"]
+    with session_factory() as session:
+        event = session.get(CheckoutEvent, event_id)
+        event.received_at = datetime.now(UTC) - timedelta(seconds=35)
+        session.commit()
+    monkeypatch.setattr(tasks, "SessionLocal", session_factory)
+    queued = []
+
+    def enqueue(*args):
+        queued.append(args)
+        if len(queued) == 1:
+            raise ConnectionError("contract broker still unavailable")
+
+    monkeypatch.setattr(tasks.check_demo_abandonment, "delay", enqueue)
+    assert tasks.dispatch_due_demo_abandonments.run() == 0
+    assert tasks.dispatch_due_demo_abandonments.run() == 1
+    assert queued == [(created["session_id"], event_id)] * 2
+
+
+def test_expired_dismissal_never_calls_provider_or_creates_case(session_factory):
+    from leakproof.demo.service import DemoSessionExpired
+
+    with session_factory() as session:
+        created, provider, limiter, settings = create_session(session)
+        dismissed = ingest_checkout_event(
+            session,
+            created.session_id,
+            checkout_event("checkout_dismissed", "expires"),
+            session_token=created.session_token,
+            limiter=limiter,
+            settings=settings,
+            now=NOW,
+        )
+        expired = NOW + timedelta(minutes=31)
+        provider.failure = ProviderError(
+            provider="razorpay",
+            operation="list_order_payments",
+            error_class="timeout",
+            retryable=True,
+            message="must not call provider",
+        )
+        assert not due_abandonment_checks(session, settings=settings, now=expired)
+        assert (
+            materialize_checkout_abandonment(
+                session,
+                created.session_id,
+                dismissed.dismissal_event_id,
+                provider=provider,
+                settings=settings,
+                now=expired,
+            )
+            is None
+        )
+        assert session.get(DemoSession, created.session_id).state == "EXPIRED"
+        with pytest.raises(DemoSessionExpired):
+            ingest_checkout_event(
+                session,
+                created.session_id,
+                checkout_event("checkout_dismissed", "late"),
+                session_token=created.session_token,
+                limiter=limiter,
+                settings=settings,
+                now=expired,
+            )
+        assert session.scalar(select(func.count()).select_from(RecoveryCase)) == 0

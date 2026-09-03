@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from sqlalchemy import select
@@ -111,6 +112,7 @@ def test_both_hero_paths_finish_from_fresh_sessions_and_export_sanitized_evidenc
     hero_path: str,
     recipient: str | None,
     luna_fallback: bool,
+    request,
 ):
     config = settings()
     payment = FakePaymentProvider()
@@ -118,7 +120,12 @@ def test_both_hero_paths_finish_from_fresh_sessions_and_export_sanitized_evidenc
     with session_factory() as session:
         created = create_demo_session(
             session,
-            DemoSessionCreateRequest(recipient=recipient),
+            DemoSessionCreateRequest(
+                recipient=recipient,
+                scenario_type="CHECKOUT_ABANDON"
+                if hero_path == "checkout_dismissal"
+                else "PAYMENT_FAILURE",
+            ),
             client_ip="203.0.113.104",
             provider=payment,
             limiter=InMemoryRateLimiter(),
@@ -229,6 +236,26 @@ def test_both_hero_paths_finish_from_fresh_sessions_and_export_sanitized_evidenc
                 now=NOW,
             )
 
+        valid_token = issue_recovery_token(
+            created.session_id,
+            config.default_merchant_id,
+            created.razorpay_order_id,
+            created.amount_paise,
+            created.currency,
+            NOW + timedelta(minutes=10),
+            config.recovery_token_secret,
+            scenario_type=created.scenario_type,
+        )
+        reopened = get_recovery_bootstrap(
+            session,
+            valid_token,
+            provider=payment,
+            settings=config,
+            now=NOW + timedelta(seconds=60),
+        )
+        assert reopened.razorpay_order_id == created.razorpay_order_id
+        assert len(payment.create_calls) == 1
+
         closed_case_id, _ = process_payload(
             session,
             razorpay_payload(
@@ -248,6 +275,13 @@ def test_both_hero_paths_finish_from_fresh_sessions_and_export_sanitized_evidenc
             now=NOW + timedelta(minutes=3),
         )
         serialized = artifact.model_dump_json()
+        output = request.config.getoption("--acceptance-output-dir")
+        if output:
+            directory = Path(output)
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / f"contract-{hero_path}.json").write_text(
+                artifact.model_dump_json(indent=2) + "\n"
+            )
 
         assert artifact.schema_version == "2026-09-04"
         assert artifact.passed is True, [

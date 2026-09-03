@@ -78,3 +78,9 @@ def client(
     ) as test_client:
         yield test_client
     app.dependency_overrides.clear()
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--acceptance-output-dir", default=None, help="Write synthetic contract exports."
+    )

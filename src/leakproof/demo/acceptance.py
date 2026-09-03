@@ -111,7 +111,18 @@ def build_demo_acceptance_export(
         )
         is not None
     )
-    provider_verified = webhook_verified or checkout_verified
+    api_capture_verified = recovered and any(
+        "captured" in call.safe_response_metadata.get("statuses", [])
+        for call in session.scalars(
+            select(ProviderCall).where(
+                ProviderCall.session_id == session_id,
+                ProviderCall.provider == "razorpay",
+                ProviderCall.operation.in_(["list_order_payments", "recovery_order_check"]),
+                ProviderCall.status == "succeeded",
+            )
+        )
+    )
+    provider_verified = webhook_verified or checkout_verified or api_capture_verified
     no_pending_contacts = not any(
         action.action_type == "email_link" and action.status == "pending"
         for action in projection.recovery_actions
@@ -124,9 +135,11 @@ def build_demo_acceptance_export(
     replay_matches = False
     if case_row is not None:
         replay_matches = replay_case(session, case_row.id).projection_matches
+    latest_payment_calls = {
+        item.operation: item for item in projection.provider_statuses if item.provider == "razorpay"
+    }
     blocking_provider_failure = any(
-        item.provider == "razorpay" and item.status == "failed"
-        for item in projection.provider_statuses
+        item.status == "failed" for item in latest_payment_calls.values()
     )
     checks = [
         AcceptanceCheck(
@@ -155,9 +168,16 @@ def build_demo_acceptance_export(
         ),
         AcceptanceCheck(
             check="email_action_exercised",
-            passed=email_action_exercised,
+            passed=email_action_exercised
+            or (
+                recovered
+                and any(
+                    action.action_type == "email_link" and action.status == "cancelled"
+                    for action in projection.recovery_actions
+                )
+            ),
             severity="blocking",
-            detail="The email step reached confirmed allowlisted delivery or preview-only.",
+            detail="Email reached delivery, preview, or cancellation after verified recovery.",
         ),
         AcceptanceCheck(
             check="original_order_recovered",
@@ -218,6 +238,38 @@ def build_demo_acceptance_export(
         ),
     ]
 
+    if projection.scenario_type == "CHECKOUT_ABANDON" or (
+        case and case.leak_type == "CHECKOUT_ABANDON"
+    ):
+        checks.extend(
+            [
+                AcceptanceCheck(
+                    check="browser_dismissal_recorded",
+                    severity="blocking",
+                    passed=any(
+                        item.kind == "checkout_dismissed" and item.source == "browser"
+                        for item in projection.timeline
+                    ),
+                    detail="Browser telemetry records dismissal independently of payment truth.",
+                ),
+                AcceptanceCheck(
+                    check="unpaid_order_rechecked",
+                    severity="blocking",
+                    passed=projection.abandonment_check.unpaid_confirmed,
+                    detail="Razorpay confirmed the dismissed order was unpaid.",
+                ),
+                AcceptanceCheck(
+                    check="original_order_reopened",
+                    severity="blocking",
+                    passed=any(
+                        item.operation == "recovery_order_check" and item.status == "succeeded"
+                        for item in projection.provider_statuses
+                    ),
+                    detail="The signed recovery route rechecked the original order.",
+                ),
+            ]
+        )
+
     # Browser metadata can contain per-attempt identifiers. The acceptance artifact needs the
     # event sequence and safe classifications, not those identifiers.
     timeline = [
@@ -235,6 +287,7 @@ def build_demo_acceptance_export(
         exported_at=exported_at,
         passed=blocking_passed,
         session=AcceptanceSessionSummary(
+            scenario_type=projection.scenario_type,
             state=projection.state,
             amount_paise=projection.amount_paise,
             currency=projection.currency,

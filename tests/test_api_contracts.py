@@ -296,3 +296,159 @@ def test_public_route_contracts_are_published_in_openapi(client):
         "/webhooks/razorpay",
         "/webhooks/resend",
     } <= set(schema["paths"])
+
+
+def _invoice_contract_payload(**overrides):
+    return {
+        "id": "inv_contract",
+        "order_id": "order_contract",
+        "subscription_id": "sub_contract",
+        "status": "issued",
+        "amount": 100,
+        "amount_paid": 20,
+        "amount_due": 80,
+        "currency": "INR",
+        "short_url": "https://rzp.io/i/contract",
+        **overrides,
+    }
+
+
+def test_resource_adapters_reuse_transport_and_strip_unneeded_provider_fields():
+    import httpx2
+
+    from leakproof.providers import InvoiceProvider, RazorpayProvider, SubscriptionProvider
+
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        if request.url.path.startswith("/v1/subscriptions"):
+            data = {
+                "id": "sub_contract",
+                "plan_id": "plan_contract",
+                "status": "halted",
+                "paid_count": 9,
+                "customer_email": "never-copy@example.invalid",
+            }
+        else:
+            data = _invoice_contract_payload(
+                customer_details={"email": "never-copy@example.invalid"}
+            )
+        if request.url.path in {"/v1/invoices", "/v1/subscriptions"}:
+            data = {"items": [data]}
+        return httpx2.Response(200, json=data, headers={"x-request-id": "req_resources"})
+
+    provider = RazorpayProvider(
+        "rzp_test_contract",
+        "secret",
+        client=httpx2.Client(
+            base_url="https://api.razorpay.com", transport=httpx2.MockTransport(respond)
+        ),
+    )
+    assert isinstance(provider, InvoiceProvider) and isinstance(provider, SubscriptionProvider)
+    assert provider.fetch_invoice("inv_contract").amount_due_paise == 80
+    assert provider.fetch_subscription("sub_contract").affected_invoice_id is None
+    assert len(provider.list_subscription_invoices("sub_contract")) == 1
+    assert provider.list_subscriptions()[0].status == "halted"
+    assert "customer_email" not in provider.fetch_subscription("sub_contract").model_dump()
+    assert "customer_details" not in provider.fetch_invoice("inv_contract").model_dump()
+    assert requests[2].url.params["subscription_id"] == "sub_contract"
+    with pytest.raises(ValidationError):
+        provider.fetch_invoice("sub_wrong")
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"id": "inv_another"},
+        {"id": "order_wrong"},
+        {"status": "overdue"},
+        {"currency": "invalid"},
+        {"amount_due": 90},
+        {"amount_paid": -1},
+    ],
+)
+def test_typed_invoice_adapter_rejects_malformed_or_mismatched_provider_response(changes):
+    import httpx2
+
+    from leakproof.providers import ProviderError, RazorpayProvider
+
+    provider = RazorpayProvider(
+        "rzp_test_contract",
+        "secret",
+        client=httpx2.Client(
+            base_url="https://api.razorpay.com",
+            transport=httpx2.MockTransport(
+                lambda _: httpx2.Response(200, json=_invoice_contract_payload(**changes))
+            ),
+        ),
+    )
+    with pytest.raises(ProviderError):
+        provider.fetch_invoice("inv_contract")
+
+
+def test_resource_setup_disables_notifications_and_never_retries_ambiguous_post():
+    import json
+
+    import httpx2
+
+    from leakproof.providers import (
+        CreateInvoiceRequest,
+        CreateSubscriptionRequest,
+        ProviderError,
+        RazorpayProvider,
+    )
+
+    seen = []
+
+    def respond(request):
+        seen.append((request.method, request.url.path, json.loads(request.content or "{}")))
+        if request.url.path == "/v1/subscriptions":
+            data = {"id": "sub_contract", "plan_id": "plan_contract", "status": "created"}
+        else:
+            data = _invoice_contract_payload(
+                status="draft", amount=100, amount_paid=0, amount_due=100
+            )
+        return httpx2.Response(200, json=data)
+
+    provider = RazorpayProvider(
+        "rzp_test_contract",
+        "secret",
+        client=httpx2.Client(
+            base_url="https://api.razorpay.com", transport=httpx2.MockTransport(respond)
+        ),
+    )
+    request = CreateInvoiceRequest(
+        amount_paise=100,
+        currency="INR",
+        receipt="fixture",
+        customer_id="cust_contract",
+        line_item_name="Test item",
+        idempotency_key="setup_fixture",
+    )
+    assert provider.create_invoice(request).id == "inv_contract"
+    provider.issue_invoice("inv_contract")
+    provider.create_subscription(CreateSubscriptionRequest(plan_id="plan_contract", total_count=2))
+    assert seen[0][2]["sms_notify"] is False and seen[0][2]["email_notify"] is False
+    assert seen[0][2]["draft"] == "1" and seen[2][2]["customer_notify"] is False
+    failures = []
+
+    def unavailable(request):
+        failures.append(request)
+        return httpx2.Response(503, json={})
+
+    provider = RazorpayProvider(
+        "rzp_test_contract",
+        "secret",
+        max_attempts=3,
+        sleep=lambda _: None,
+        client=httpx2.Client(
+            base_url="https://api.razorpay.com", transport=httpx2.MockTransport(unavailable)
+        ),
+    )
+    with pytest.raises(ProviderError):
+        provider.create_invoice(request)
+    assert len(failures) == 1
+    with pytest.raises(ProviderError):
+        provider.fetch_invoice("inv_contract")
+    assert len(failures) == 4

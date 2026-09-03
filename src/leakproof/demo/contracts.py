@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from leakproof.models.domain import LeakType
+from leakproof.models.resources import SetupState
 from leakproof.provenance import DataProvenance
 
 
@@ -77,6 +79,7 @@ class EmailMode(StrEnum):
 
 
 class DemoSessionCreateRequest(StrictContract):
+    scenario_type: LeakType = LeakType.PAYMENT_FAILURE
     recipient: str | None = Field(default=None, min_length=3, max_length=254)
 
     @field_validator("recipient")
@@ -91,6 +94,11 @@ class DemoSessionCreateRequest(StrictContract):
 
 
 class DemoSessionCreated(StrictContract):
+    scenario_type: Literal[LeakType.PAYMENT_FAILURE, LeakType.CHECKOUT_ABANDON] = (
+        LeakType.PAYMENT_FAILURE
+    )
+    primary_entity_type: Literal["order"] = "order"
+    setup_state: SetupState = SetupState.READY
     session_id: str
     session_token: str
     razorpay_key_id: str
@@ -141,6 +149,7 @@ class CheckoutPaymentVerificationReceipt(StrictContract):
 
 
 class RecoveryBootstrap(StrictContract):
+    purpose: Literal["order_checkout"] = "order_checkout"
     session_id: str
     razorpay_key_id: str
     razorpay_order_id: str
@@ -166,7 +175,7 @@ class CaseInsight(StrictContract):
 
 class CaseProjection(StrictContract):
     case_id: str
-    leak_type: Literal["PAYMENT_FAILURE", "CHECKOUT_ABANDON"]
+    leak_type: LeakType
     state: str
     deterministic_diagnosis: dict[str, Any] | None = None
     insight: CaseInsight | None = None
@@ -185,7 +194,13 @@ class ProviderStatus(StrictContract):
 
 class RecoveryActionProjection(StrictContract):
     action_id: str | None = None
-    action_type: Literal["recovery_link", "email_link"]
+    action_type: Literal[
+        "recovery_link",
+        "invoice_payment_link",
+        "subscription_method_update",
+        "email_link",
+        "merchant_review",
+    ]
     status: str
     scheduled_for: datetime
     executed_at: datetime | None = None
@@ -210,11 +225,26 @@ class OperationalMetrics(StrictContract):
     luna_cost_paise: int = Field(ge=0)
 
 
+class AbandonmentCheck(StrictContract):
+    status: Literal[
+        "idle", "waiting", "provider_recheck", "provider_retry", "provider_pending",
+        "confirmed", "payment_failure", "recovered",
+    ] = "idle"
+    due_at: datetime | None = None
+    browser_dismissed_at: datetime | None = None
+    unpaid_confirmed: bool = False
+
+
 class DemoSessionProjection(StrictContract):
+    abandonment_check: AbandonmentCheck = Field(default_factory=AbandonmentCheck)
+    scenario_type: LeakType = LeakType.PAYMENT_FAILURE
+    primary_entity_type: Literal["order", "invoice", "subscription"] = "order"
+    setup_state: SetupState = SetupState.READY
+    capability_evidence: DataProvenance = DataProvenance.ARCHITECTURE_READY
     data_provenance: DataProvenance
     session_id: str
     state: DemoSessionState
-    amount_paise: int = Field(gt=0)
+    amount_paise: int = Field(ge=0)
     currency: str = Field(pattern=r"^[A-Z]{3}$")
     expires_at: datetime
     email_mode: EmailMode
@@ -231,6 +261,7 @@ class DemoSessionProjection(StrictContract):
 
 
 class AcceptanceSessionSummary(StrictContract):
+    scenario_type: LeakType | None = None
     state: DemoSessionState
     amount_paise: int = Field(gt=0)
     currency: str = Field(pattern=r"^[A-Z]{3}$")
@@ -315,3 +346,104 @@ class ResendWebhookEnvelope(BaseModel):
     ]
     created_at: datetime
     data: ResendWebhookData
+
+
+class InvoiceRecoveryBootstrap(StrictContract):
+    purpose: Literal["invoice_hosted_payment"] = "invoice_hosted_payment"
+    session_id: str
+    redirect_url: str = Field(pattern=r"^https://")
+    expires_at: datetime
+
+
+class SubscriptionRecoveryBootstrap(StrictContract):
+    purpose: Literal["subscription_method_update"] = "subscription_method_update"
+    session_id: str
+    razorpay_key_id: str
+    subscription_id: str = Field(pattern=r"^sub_[A-Za-z0-9_]+$")
+    subscription_card_change: Literal[True] = True
+    expires_at: datetime
+
+
+# Reserved contracts for later adapters; the existing route still returns only order_checkout.
+ResourceRecoveryBootstrap = Annotated[
+    RecoveryBootstrap | InvoiceRecoveryBootstrap | SubscriptionRecoveryBootstrap,
+    Field(discriminator="purpose"),
+]
+
+
+class ScenarioCapability(StrictContract):
+    scenario_type: LeakType
+    primary_entity_type: Literal["order", "invoice", "subscription"]
+    enabled: bool
+    capability_evidence: DataProvenance
+    reason: str | None = None
+
+
+SCENARIO_CAPABILITIES = (
+    ScenarioCapability(
+        scenario_type=LeakType.PAYMENT_FAILURE,
+        primary_entity_type="order",
+        enabled=True,
+        capability_evidence=DataProvenance.LIVE_PROVIDER_VERIFIED,
+    ),
+    ScenarioCapability(
+        scenario_type=LeakType.CHECKOUT_ABANDON,
+        primary_entity_type="order",
+        enabled=True,
+        capability_evidence=DataProvenance.LIVE_PROVIDER_VERIFIED,
+        reason="Existing order flow; telemetry-specific acceptance refresh is pending.",
+    ),
+    ScenarioCapability(
+        scenario_type=LeakType.INVOICE_OVERDUE,
+        primary_entity_type="invoice",
+        enabled=False,
+        capability_evidence=DataProvenance.ARCHITECTURE_READY,
+        reason="Invoice provider lifecycle and recovery are not implemented.",
+    ),
+    ScenarioCapability(
+        scenario_type=LeakType.SUBSCRIPTION_HALT,
+        primary_entity_type="subscription",
+        enabled=False,
+        capability_evidence=DataProvenance.ARCHITECTURE_READY,
+        reason="Subscription provider lifecycle and method update are not implemented.",
+    ),
+    ScenarioCapability(
+        scenario_type=LeakType.MANDATE_BROKEN,
+        primary_entity_type="subscription",
+        enabled=False,
+        capability_evidence=DataProvenance.ARCHITECTURE_READY,
+        reason="Qualified mandate detection and re-authorization are not implemented.",
+    ),
+)
+
+
+class InvoiceSessionCreated(StrictContract):
+    scenario_type: Literal[LeakType.INVOICE_OVERDUE] = LeakType.INVOICE_OVERDUE
+    primary_entity_type: Literal["invoice"] = "invoice"
+    primary_entity_id: str = Field(pattern=r"^inv_[A-Za-z0-9_]+$")
+    session_id: str
+    session_token: str
+    setup_state: SetupState
+    amount_paise: int = Field(ge=0)
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    expires_at: datetime
+    email_mode: EmailMode
+
+
+class SubscriptionSessionCreated(StrictContract):
+    scenario_type: Literal[LeakType.SUBSCRIPTION_HALT, LeakType.MANDATE_BROKEN]
+    primary_entity_type: Literal["subscription"] = "subscription"
+    primary_entity_id: str = Field(pattern=r"^sub_[A-Za-z0-9_]+$")
+    session_id: str
+    session_token: str
+    setup_state: SetupState
+    amount_paise: int = Field(ge=0)
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    expires_at: datetime
+    email_mode: EmailMode
+
+
+ResourceSessionCreated = Annotated[
+    DemoSessionCreated | InvoiceSessionCreated | SubscriptionSessionCreated,
+    Field(discriminator="primary_entity_type"),
+]

@@ -15,6 +15,7 @@ from leakproof.models.db import (
     Action,
     Customer,
     Merchant,
+    ProviderObligation,
     RecoveryAttribution,
     RecoveryCase,
 )
@@ -125,19 +126,33 @@ def ensure_merchant(session: Session, merchant_id: str) -> None:
 
 def ensure_principals(session: Session, signal: NormalizedSignal) -> None:
     ensure_merchant(session, signal.merchant_id)
-    if session.get(Customer, signal.customer_id) is None:
+    existing_customer = session.get(Customer, signal.customer_id)
+    if existing_customer is not None and existing_customer.merchant_id != signal.merchant_id:
+        raise ValueError("customer belongs to another merchant")
+    if existing_customer is None:
         customer = Customer(id=signal.customer_id, merchant_id=signal.merchant_id)
         try:
             with session.begin_nested():
                 session.add(customer)
                 session.flush()
         except IntegrityError:
-            if session.get(Customer, signal.customer_id) is None:
+            existing_customer = session.get(Customer, signal.customer_id)
+            if existing_customer is None:
                 raise
+            if existing_customer.merchant_id != signal.merchant_id:
+                raise ValueError("customer belongs to another merchant") from None
 
 
-def record_signal(session: Session, signal: NormalizedSignal) -> tuple[RecoveryCase, bool]:
+def record_signal(
+    session: Session, signal: NormalizedSignal, *, _resource_bound: bool = False
+) -> tuple[RecoveryCase | None, bool]:
     """Create one case per dedupe key; every accepted signal becomes one event."""
+    if not _resource_bound:
+        from leakproof.provider_resources import registered_risk
+
+        bound = registered_risk(session, signal)
+        if bound is not None:
+            return bound
     ensure_principals(session, signal)
     key = dedupe_key(signal)
     case = session.scalar(
@@ -266,6 +281,11 @@ class PaidSignal:
 
 def record_paid_signal(session: Session, signal: PaidSignal) -> RecoveryCase | None:
     """Stop a paid case and persist pre-declared, last-touch attribution when eligible."""
+    from leakproof.provider_resources import registered_recovery
+
+    bound, case = registered_recovery(session, signal)
+    if bound:
+        return case
     exact = [RecoveryCase.entity_id == signal.entity_id]
     if signal.entity_root_id:
         # Live abandonment cases use the original order as their entity while a
@@ -277,6 +297,11 @@ def record_paid_signal(session: Session, signal: PaidSignal) -> RecoveryCase | N
         session.scalars(
             select(RecoveryCase)
             .where(RecoveryCase.merchant_id == signal.merchant_id)
+            .where(
+                ~select(ProviderObligation.id)
+                .where(ProviderObligation.case_id == RecoveryCase.id)
+                .exists()
+            )
             .where(
                 or_(
                     *exact,
@@ -293,12 +318,13 @@ def record_paid_signal(session: Session, signal: PaidSignal) -> RecoveryCase | N
     case = None
     matched_by = ""
     for candidate in candidates:
-        entity_match = candidate.entity_id == signal.entity_id or (
-            signal.entity_root_id is not None
-            and candidate.entity_id == signal.entity_root_id
-        ) or (
-            signal.entity_root_id is not None
-            and candidate.dedupe_key == f"pf:{signal.customer_id}:{signal.entity_root_id}"
+        entity_match = (
+            candidate.entity_id == signal.entity_id
+            or (signal.entity_root_id is not None and candidate.entity_id == signal.entity_root_id)
+            or (
+                signal.entity_root_id is not None
+                and candidate.dedupe_key == f"pf:{signal.customer_id}:{signal.entity_root_id}"
+            )
         )
         amount_match = abs(candidate.amount_at_risk - signal.amount_paise) <= round(
             candidate.amount_at_risk * tolerance

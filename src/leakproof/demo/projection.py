@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from statistics import median
 
 from sqlalchemy import or_, select
@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from leakproof.config import Settings
 from leakproof.demo.contracts import (
+    AbandonmentCheck,
     CaseInsight,
     CaseProjection,
     DemoSessionProjection,
@@ -17,7 +18,6 @@ from leakproof.demo.contracts import (
     ProviderStatus,
     RecoveryActionProjection,
     TimelineItem,
-    live_case_dedupe_key,
 )
 from leakproof.demo.security import (
     InvalidSessionToken,
@@ -28,6 +28,7 @@ from leakproof.demo.service import (
     DemoSessionExpired,
     DemoSessionUnauthorized,
     issue_demo_recovery_token,
+    latest_checkout_event,
 )
 from leakproof.models.db import (
     Action,
@@ -40,6 +41,9 @@ from leakproof.models.db import (
     Event,
     LLMCall,
     ProviderCall,
+    ProviderEntity,
+    ProviderObligation,
+    RecoveryAttribution,
     RecoveryCase,
 )
 from leakproof.provenance import DataProvenance
@@ -170,17 +174,9 @@ def get_demo_session_projection(
     if _utc(demo.expires_at) <= now and DemoSessionState(demo.state) != DemoSessionState.RECOVERED:
         raise DemoSessionExpired("demo session has expired")
 
-    case = session.scalar(
-        select(RecoveryCase)
-        .where(
-            RecoveryCase.merchant_id == demo.merchant_id,
-            or_(
-                RecoveryCase.dedupe_key == live_case_dedupe_key(demo.id, demo.razorpay_order_id),
-                RecoveryCase.customer_id == demo.customer_id,
-            ),
-        )
-        .order_by(RecoveryCase.detected_at.desc())
-    )
+    from leakproof.provider_resources import case_for_session, order_recovery_supported
+
+    case = case_for_session(session, demo)
     diagnosis = session.get(Diagnosis, case.id) if case else None
     insight_record = session.get(CaseInsightRecord, case.id) if case else None
     insight = None
@@ -321,7 +317,9 @@ def get_demo_session_projection(
         if case
         else []
     )
-    recovery_url_available = case is not None and DemoSessionState(demo.state) in {
+    recovery_url_available = (
+        order_recovery_supported(session, demo) and case is not None
+    ) and DemoSessionState(demo.state) in {
         DemoSessionState.AT_RISK,
         DemoSessionState.CHECKOUT_OPEN,
     }
@@ -367,14 +365,37 @@ def get_demo_session_projection(
             if action.action_type == "email_link"
         )
 
+    registered_cases = (
+        select(ProviderObligation.case_id)
+        .join(ProviderEntity, ProviderEntity.obligation_id == ProviderObligation.id)
+        .where(
+            ProviderObligation.merchant_id == demo.merchant_id,
+            ProviderObligation.mode == demo.provider_mode,
+            ProviderEntity.session_id.is_not(None),
+            ProviderObligation.reconciliation_required.is_(False),
+        )
+    )
     live_cases = list(
         session.scalars(
             select(RecoveryCase).where(
                 RecoveryCase.merchant_id == demo.merchant_id,
-                RecoveryCase.dedupe_key.like("live:%"),
+                or_(RecoveryCase.dedupe_key.like("live:%"), RecoveryCase.id.in_(registered_cases)),
+                ~select(ProviderObligation.id)
+                .where(
+                    ProviderObligation.case_id == RecoveryCase.id,
+                    ProviderObligation.reconciliation_required.is_(True),
+                )
+                .exists(),
             )
         )
     )
+    measured_ids = {item.id for item in live_cases} | ({case.id} if case else set())
+    credited_amounts = {
+        row.case_id: row.amount_paise
+        for row in session.scalars(
+            select(RecoveryAttribution).where(RecoveryAttribution.case_id.in_(measured_ids))
+        )
+    }
     recovered = [item for item in live_cases if item.outcome == "RECOVERED"]
     durations = [
         (_utc(item.closed_at) - _utc(item.detected_at)).total_seconds()
@@ -418,12 +439,67 @@ def get_demo_session_projection(
         (action.verdict for action in reversed(actions) if action.verdict is not None),
         None,
     )
+    latest = latest_checkout_event(session, demo.id)
+    unpaid_confirmed = any(
+        call.operation == "list_order_payments"
+        and call.status == "succeeded"
+        and call.safe_response_metadata.get("unpaid_confirmed") is True
+        for call in provider_calls
+    )
+    abandonment = AbandonmentCheck(unpaid_confirmed=unpaid_confirmed)
+    if demo.state == "RECOVERED":
+        abandonment.status = "recovered"
+    elif case and case.leak_type == "PAYMENT_FAILURE":
+        abandonment.status = "payment_failure"
+    elif latest and latest.event_type == "checkout_dismissed":
+        abandonment.browser_dismissed_at = _utc(latest.received_at)
+        abandonment.due_at = _utc(latest.received_at) + timedelta(
+            seconds=settings.demo_abandonment_delay_seconds
+        )
+        check = next(
+            (
+                call
+                for call in reversed(provider_calls)
+                if call.operation == "list_order_payments"
+                and call.safe_response_metadata.get("dismissal_event_id") == latest.id
+            ),
+            None,
+        )
+        if check and check.status == "failed":
+            abandonment.status = "provider_retry"
+        elif check and not check.safe_response_metadata.get("check_resolved"):
+            abandonment.status = "provider_pending"
+        elif check and case:
+            abandonment.status = "confirmed"
+        else:
+            abandonment.status = "waiting" if now < abandonment.due_at else "provider_recheck"
+    elif case and case.leak_type == "CHECKOUT_ABANDON":
+        abandonment.status = "confirmed"
+    if abandonment.status == "provider_pending":
+        recovery_url_available = False
+        recovery_path = None
+        for action in recovery_actions:
+            if action.action_type == "recovery_link":
+                action.status = "unavailable"
+    provenance = (
+        DataProvenance.LIVE_PROVIDER_VERIFIED
+        if settings.mode == "live_demo" and demo.primary_entity_type == "order"
+        else DataProvenance(demo.capability_evidence)
+    )
+    if (
+        settings.mode == "live_demo"
+        and case
+        and case.leak_type == "CHECKOUT_ABANDON"
+        and unpaid_confirmed
+    ):
+        provenance = DataProvenance.LIVE_TELEMETRY_PROVIDER_RECONCILED
     return DemoSessionProjection(
-        data_provenance=(
-            DataProvenance.LIVE_PROVIDER_VERIFIED
-            if settings.mode == "live_demo"
-            else DataProvenance.SIMULATED_END_TO_END
-        ),
+        abandonment_check=abandonment,
+        scenario_type=demo.scenario_type,
+        primary_entity_type=demo.primary_entity_type,
+        setup_state=demo.setup_state,
+        capability_evidence=demo.capability_evidence,
+        data_provenance=provenance,
         session_id=demo.id,
         state=DemoSessionState(demo.state),
         amount_paise=demo.amount_paise,
@@ -462,11 +538,7 @@ def get_demo_session_projection(
             recovered_cases=int(
                 case is not None and DemoSessionState(demo.state) == DemoSessionState.RECOVERED
             ),
-            recovered_amount_paise=(
-                demo.amount_paise
-                if case is not None and DemoSessionState(demo.state) == DemoSessionState.RECOVERED
-                else 0
-            ),
+            recovered_amount_paise=credited_amounts.get(case.id, 0) if case else 0,
             recovery_rate=(
                 1.0
                 if case is not None and DemoSessionState(demo.state) == DemoSessionState.RECOVERED
@@ -491,7 +563,7 @@ def get_demo_session_projection(
         environment_metrics=OperationalMetrics(
             cases_detected=len(live_cases),
             recovered_cases=len(recovered),
-            recovered_amount_paise=sum(item.amount_at_risk for item in recovered),
+            recovered_amount_paise=sum(credited_amounts.get(item.id, 0) for item in live_cases),
             recovery_rate=(len(recovered) / len(live_cases) if live_cases else 0),
             median_recovery_time_seconds=median(durations) if durations else None,
             provider_failures=live_provider_failures,

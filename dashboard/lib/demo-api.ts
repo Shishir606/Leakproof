@@ -1,3 +1,4 @@
+import type { LeakType, ScenarioCapability } from "./resource-types";
 import type {
   ApiErrorPayload,
   CheckoutEvent,
@@ -31,11 +32,11 @@ async function readResponse<T>(response: Response): Promise<T> {
   return payload as T;
 }
 
-export async function createSession(recipient?: string): Promise<DemoSession> {
+export async function createSession(recipient?: string, scenario_type: LeakType = "PAYMENT_FAILURE"): Promise<DemoSession> {
   const response = await fetch("/api/demo/sessions", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(recipient ? { recipient } : {}),
+    body: JSON.stringify({ ...(recipient ? { recipient } : {}), scenario_type }),
   });
   return readResponse<DemoSession>(response);
 }
@@ -102,4 +103,24 @@ export async function getRecoveryBootstrap(token: string): Promise<RecoveryBoots
     cache: "no-store",
   });
   return readResponse<RecoveryBootstrap>(response);
+}
+
+
+export async function getScenarios(): Promise<ScenarioCapability[]> {
+  return readResponse<ScenarioCapability[]>(await fetch("/api/demo/scenarios", { cache: "no-store" }));
+}
+
+export async function downloadAcceptance(session: DemoSession): Promise<boolean> {
+  const response = await fetch(`/api/demo/sessions/${encodeURIComponent(session.session_id)}/acceptance.json`, {
+    cache: "no-store",
+    headers: { "x-leakproof-session-token": session.session_token },
+  });
+  const artifact = await readResponse<{ passed: boolean }>(response);
+  const url = URL.createObjectURL(new Blob([JSON.stringify(artifact, null, 2) + "\n"], { type: "application/json" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `checkout-acceptance-${new Date().toISOString().replaceAll(":", "-")}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
+  return artifact.passed;
 }

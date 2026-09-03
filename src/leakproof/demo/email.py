@@ -53,12 +53,16 @@ def _utc(value: datetime) -> datetime:
 
 
 def _demo_for_case(session: Session, case: RecoveryCase) -> DemoSession | None:
-    return session.scalar(
-        select(DemoSession).where(
-            DemoSession.merchant_id == case.merchant_id,
-            DemoSession.customer_id == case.customer_id,
-        )
-    )
+    from leakproof.provider_resources import case_for_session, order_recovery_supported
+
+    for demo in session.scalars(
+        select(DemoSession).where(DemoSession.merchant_id == case.merchant_id)
+    ):
+        if order_recovery_supported(session, demo):
+            owner = case_for_session(session, demo)
+            if owner is not None and owner.id == case.id:
+                return demo
+    return None
 
 
 def schedule_demo_recovery_email(
@@ -89,8 +93,7 @@ def schedule_demo_recovery_email(
         case_id=case.id,
         step_index=1,
         action_type="email_link",
-        scheduled_for=scheduled_from
-        + timedelta(seconds=settings.demo_abandonment_delay_seconds),
+        scheduled_for=scheduled_from + timedelta(seconds=settings.demo_abandonment_delay_seconds),
         idempotency_key=idempotency_key(case.id, 1, 1),
         status="pending",
         attempt_count=0,
@@ -212,8 +215,20 @@ def execute_demo_recovery_email(
     demo = _demo_for_case(session, case)
     if demo is None:
         raise ValueError("email action has no demo session")
-    if case.outcome == CaseOutcome.RECOVERED.value:
+    if case.outcome == CaseOutcome.RECOVERED.value or action.status == "cancelled":
         action.status = "cancelled"
+        session.commit()
+        return EmailExecutionResult(action.id, "cancelled")
+
+    if _utc(demo.expires_at) <= attempted_at or demo.state == "EXPIRED":
+        action.status = "cancelled"
+        demo.state = "EXPIRED"
+        demo.updated_at = attempted_at
+        append_event(
+            session, case, kind="ACTED", actor="live_demo_planner",
+            payload={"action_type": "email_link", "status": "cancelled",
+                     "reason": "session_expired"},
+        )
         session.commit()
         return EmailExecutionResult(action.id, "cancelled")
 
@@ -282,9 +297,7 @@ def execute_demo_recovery_email(
         )
 
     token = issue_demo_recovery_token(session, demo.id, settings=settings, now=attempted_at)
-    recovery_url = (
-        f"{settings.public_base_url.rstrip('/')}/recover/{quote(token, safe='')}"
-    )
+    recovery_url = f"{settings.public_base_url.rstrip('/')}/recover/{quote(token, safe='')}"
     message = TemplateRegistry().render(
         RECOVERY_EMAIL_TEMPLATE_ID,
         {
@@ -333,10 +346,9 @@ def execute_demo_recovery_email(
         session.commit()
         return EmailExecutionResult(action.id, "failed")
 
-    warning = (
-        (daily + 1) / settings.resend_daily_limit >= 0.8
-        or (monthly + 1) / settings.resend_monthly_limit >= 0.8
-    )
+    warning = (daily + 1) / settings.resend_daily_limit >= 0.8 or (
+        monthly + 1
+    ) / settings.resend_monthly_limit >= 0.8
     delivery = EmailDelivery(
         session_id=demo.id,
         case_id=case.id,

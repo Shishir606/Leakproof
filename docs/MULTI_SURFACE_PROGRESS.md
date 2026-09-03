@@ -335,3 +335,232 @@ The two Markdown documents and the sanitized GET probe record are the only deliv
 Checked JSON structure, local Markdown targets, credential/provider-ID redaction and Git whitespace.
 No database migration, service restart, deployment, commit or push occurred; existing acceptance
 artifacts and application/tests were preserved.
+
+## 2026-09-03 — Shared multi-resource foundation
+
+**Implemented the shared foundation; new interactive surfaces remain disabled.** Existing order
+payment and checkout-abandonment routes, Checkout components, session token authorization, case IDs,
+audit replay, diagnosis, policy, action/email idempotency, and historical acceptance schema are reused.
+No new provider account lifecycle, autonomous debit, delivery rehearsal, deployment, or application
+DB migration was performed. Verification databases are disposable.
+
+### Implementation and compatibility
+
+- Forward-only `0011_multi_resource` adds scenario selection, primary resource identity, provider
+  mode, setup status, and capability evidence to `demo_sessions`. It populates generic order fields
+  before relaxing `razorpay_order_id`, retains the old column, and backfills proven historical
+  session/order ownership and known payment credits without rewriting cases/events/actions/emails.
+  Existing historical setup is `READY`; recovery continues using the existing session `state`.
+  `AT_RISK` and `RECOVERED` deliberately are not setup states.
+- `provider_entities` preserves payment/order/invoice/subscription/token relationships, scoped by
+  merchant/provider/mode. `provider_obligations` uniquely owns a case per order/invoice. Invoice IDs
+  identify subscription cycles; parents and authorization tokens never become receivables. Composite
+  foreign keys enforce merchant/mode isolation, including session and case ownership.
+- `RiskSignal`, `EntityStateSignal`, and `RecoverySignal` are discriminated contracts. Occurrence
+  time prefers the webhook envelope; subscription counters/resource creation times no longer create
+  cycle identities. Pending/halted/activated subscription payloads persist non-monetary state; missing
+  cycles remain provisional, without contact or attribution. Recurring payment context cannot enter
+  the legacy customer/amount fallback, and provider-backed cases are excluded from that fallback.
+- The existing Razorpay transport now serves typed invoice create/issue/fetch/list and subscription
+  create/fetch/list/linked-invoice boundaries. Reads retain bounded retries and pagination; new setup
+  writes are test-only, suppress provider notifications, and do not automatically repeat an ambiguous
+  POST. Request keys in notes are correlation data, not a claim of provider idempotency. A later setup
+  workflow must reconcile an ambiguous creation before retrying. No factory or UI enables a new
+  scenario because these methods exist.
+- `provider_settlements` uniquely keys payment credit by merchant/provider/mode/payment. Repeated
+  surface observations reuse one credit, partial payments are capped by the balance frozen at
+  detection, and service/authorization repair cannot change invoice revenue. A full/cumulative event
+  without a payment ID stops contact and awaits monetary reconciliation. Existing Checkout verification
+  can supply the missing captured-payment identity. Success observed before risk earns no retrospective
+  credit; the existing delayed-failure history still closes as before. Displayed recovered amounts now
+  use recorded attribution, rather than assuming the entire session amount was recovered.
+- Same-obligation precedence retains case ID, arm, detection time, attribution window and credit.
+  Late order-to-invoice correlation moves the owner/ledger atomically. Conflicting historical owners
+  enter reconciliation quarantine, cancel pending contact when discovered by the correlator, and
+  cannot receive new credit or a recovery CTA. Historical duplicate credits are never silently rewritten;
+  a reviewed merge remains an operator task before such ownership can be restored.
+- Newly issued tokens are v2 and bind session, merchant, selected scenario, entity, amount/currency,
+  expiry and purpose. Unexpired v1 tokens remain valid for the original order route. Bootstrap and
+  payment verification reject invoice/method-update tokens before calling the payment provider.
+  Tokens contain no hosted URLs. New bootstrap/session unions are reserved for later surfaces.
+- Python and TypeScript share all five leak types, three primary resources, explicit signal/bootstrap
+  variants, setup states, and purpose/provenance values. TypeScript exhaustiveness checks and Python
+  enum parity tests run in the existing gates. The scenario catalog and existing creation request
+  support independent scenario selection; actual detected leak type remains evidence-driven.
+  Invoice, subscription and mandate creation through the demo API return `409 scenario_not_implemented`.
+  Their catalog label remains `ARCHITECTURE_READY`. Existing historical order capability labels and
+  voice/promise architecture labels are retained; the new provenance enums do not manufacture evidence.
+
+### Reused implementation and tests
+
+The existing `RecoveryCase`, append-only `Event`/replay reducer, `Action`, `RecoveryAttribution`,
+Resend email/delivery tables, gates, provider-call audit, order provider/fakes, session/payment endpoints,
+Checkout UI and Scenario Lab were extended in place. No second case, email, action or audit pipeline
+was introduced. Existing payment regression suites were retained. One pre-existing fake payment ID
+(`pay-existing-failure`) was corrected to provider ID syntax (`pay_existing_failure`) for the stricter
+resource boundary. Adapter contract tests extend `test_api_contracts.py` using the existing mock
+transport pattern.
+
+The original migration verifier is extended to run the new upgrade/concurrency tests after its two
+fresh-install passes. The old `0001` migration dynamically imports current ORM metadata; therefore
+upgrading it to `0010` does not reconstruct an old schema. Upgrade tests instead use a frozen actual
+pre-change `0010` schema, seed every historical session state plus case/event/action/email/attribution
+rows, reuse `0002`'s append-only trigger, stamp `0010`, and upgrade twice. They assert historical rows
+are unchanged and append-only enforcement survives. Concurrency tests exercise one owner and one
+settlement under simultaneous PostgreSQL transactions on both fresh and upgraded databases.
+
+### Reuse available to later surfaces
+
+| Later surface | Ready to reuse | Still belongs to that surface |
+|---|---|---|
+| Checkout abandonment | Independent scenario request/catalog, original order registry, current dismissal/recheck worker, v2 order tokens, shared credit and unchanged Checkout | Scenario chooser/countdown, updated telemetry-specific acceptance capture |
+| Invoice overdue | Typed invoice adapter, invoice session/bootstrap contracts, stable obligation, partial/full ledger, same-case precedence and merchant-safe lookup | Aging/expiry reconciler, validated hosted redirect, invoice wording/UI and provider artifact |
+| Subscription halt | Typed subscription/linked-invoice reads, parent/cycle relationships, pending/halted/active state contracts, method-update token purpose | Account entitlement/plan setup, cycle resolution, supported-method recovery, recurring UI and provider artifact |
+| Mandate broken | Token/subscription relationships, qualified-risk contract, highest same-obligation precedence, authorization/revenue separation | Method-specific evidence allowlist and provider qualification, re-authorization action and artifact; live allowlist remains empty |
+| Portfolio release | Shared migration/concurrency/contract gates, scenario enablement metadata, unchanged acceptance and audit infrastructure | New surface-specific evidence, final capability promotion and recruiter walkthrough |
+
+### Verification
+
+Initial integrated check: **271 tests passed, 4 PostgreSQL tests skipped in the unit command,
+88.22% coverage**; the four PostgreSQL tests were run separately and passed. TypeScript, production
+build, and the extended fresh/upgraded migration verifier passed. Subsequent boundary regressions
+cover legacy fallback exclusion, generic sessions, token purposes at payment verification,
+zero-value authorization, and cumulative-order-success reconciliation.
+
+The first full isolated release gate passed at
+`artifacts/baseline/leakproof-release-ltpin0x6/`; final checks below cover the final working tree.
+Provider adapter field checks were revalidated against official
+[create invoice](https://razorpay.com/docs/api/payments/invoices/create-with-customer-id/),
+[list invoices](https://razorpay.com/docs/api/payments/invoices/fetch-all/), and
+[create subscription](https://razorpay.com/docs/api/payments/subscriptions/create-subscription/)
+documentation. These documentation reads and mocked adapter tests do not prove account entitlements
+or earn new live/contract capability labels.
+
+Final isolated gate evidence:
+[`artifacts/baseline/leakproof-release-sffef8ku/`](../artifacts/baseline/leakproof-release-sffef8ku/)
+(`summary.json`: exit 0 and cleanup exit 0, 04:12:59–04:14:25 UTC). This ran image builds,
+Ruff, Python coverage, TypeScript/production build, public-bundle scan, the extended migration
+verifier, PostgreSQL inbox/append-only/replay verification twice, batch replay, frozen evaluations,
+AI incident/fallback verification, security and acceptance subsets.
+
+A final concurrency review added a regression for multiple transactions that have already loaded
+an obligation before taking the namespace lock. The reconciler now refreshes that row under the lock;
+three distinct concurrent captures remain capped at the original unpaid balance. This final change
+was verified by the full unit/coverage command and the extended disposable migration verifier:
+
+| Final working-tree check | Result |
+|---|---|
+| Full Python suite | **286 passed**, six PostgreSQL-only tests skipped in this command |
+| Python coverage | **88.45%**, above the existing 85% gate |
+| Disposable PostgreSQL tests | **6 passed**: fresh/upgraded history preservation, concurrent duplicate ownership/settlements, and preloaded-row concurrent credit |
+| Fresh/reused migrations | **PASS**, `0011_multi_resource`, 28 public tables |
+| TypeScript and production dashboard build | **PASS** in isolated gate, including exhaustive contract checks |
+| Ruff and whitespace validation | **PASS** |
+
+Final unit and migration logs are retained in
+[`artifacts/multi-resource-foundation/2026-09-03/`](../artifacts/multi-resource-foundation/2026-09-03/).
+All application state used by migration/release tests was disposable or in the isolated source copy.
+Existing provider acceptance artifacts and the original running application database were retained.
+The remaining surface milestones can build on this foundation; their interactive/provider evidence
+requirements remain open.
+
+## 2026-09-03 — Track A checkout abandonment
+
+**Code status: COMPLETE. Automated status: PASS. Fresh provider rehearsal: PENDING.**
+Track A's implementation is complete; the browser-driven Razorpay acceptance gate still needs
+one human test payment on this working tree. No successful current-provider transaction is claimed.
+
+### Inspected and reused
+
+The existing scenario request/catalog already accepted `CHECKOUT_ABANDON`, so no second creation
+endpoint or scenario backend was added. Reused the original Razorpay order adapter, registered
+order/obligation, v2 recovery token and legacy token compatibility, persisted `CheckoutEvent`,
+shared live case key, `ProviderCall` ledger, Beat task, diagnosis/insight fallback, email/action
+pipeline, settlement attribution and append-only replay. The completed foundation changes already
+in the working tree were retained.
+
+Extended the existing Checkout and Live Demo components, moved their existing telemetry queue into
+a shared module, and reused the authenticated session projection and recovery bootstrap. Extended
+the August 30/31, September 2/4, acceptance-artifact, and disposable PostgreSQL tests; the existing
+fake provider fixtures remain the contract boundary. There was no existing browser test harness,
+so a bounded Playwright script was added as a development-only dependency and check.
+
+### Missing functionality completed
+
+- Added an explicit **Checkout abandonment** scenario selection and **Start checkout abandonment**
+  entry. **Start a new demo** returns to selection before creating another order. Existing active
+  sessions retain their original order and selected scenario through refresh.
+- Added one shared waiting/provider display to Checkout and the Live dashboard. Its countdown uses
+  the persisted server receipt deadline. It distinguishes dismissal telemetry, waiting for a read,
+  provider retry, provider-pending payment, confirmed unpaid abandonment, failure precedence, and
+  verified recovery. A known pending provider payment hides the recovery link.
+- Telemetry retains the exact client event ID through network failures and refresh, serializes
+  delivery, retries on both pages, and deduplicates repeated dismiss callbacks. Terminal/expired
+  sessions clear queued events. Expiry disables stale recovery and offers an explicit new rehearsal.
+- Stale workers use server receipt sequence, including equal timestamps. Reopening Checkout, a new
+  attempt/completion, or a newer dismissal supersedes the old timer. The provider-call ledger now
+  binds a completed check to its dismissal, preventing repeated calls after worker redelivery.
+- Scheduled rescue includes unresolved dismissals on existing at-risk cases. Failed broker dispatch
+  remains eligible on the next Beat and does not stop the rest of the dispatch batch. Provider
+  errors leave an auditable retry state; authorized/in-progress payments stay pending. Completed
+  checks and authoritative failure/recovery stop the abandonment timer. No new workflow table or
+  migration was required for Track A.
+- Reused same-case failure promotion and cancellation after verified payment. Captures found during
+  worker or recovery-bootstrap reads now use the existing settlement/closure path as well, closing
+  the same case and cancelling pending contact. Recovery rechecks the exact order at every
+  **Continue original order** click, so an earlier bootstrap cannot authorize a stale reopening.
+  Expired sessions also cancel delayed email actions once, with an audit reason and no provider send.
+- Live abandonment projections/exports use `LIVE_TELEMETRY_PROVIDER_RECONCILED` after the persisted
+  unpaid-order confirmation. Simulated checks retain `SIMULATED_END_TO_END`. Added dismissal,
+  unpaid-order recheck and original-order-bootstrap acceptance checks; transient provider failures
+  that subsequently succeed remain advisory, while unresolved latest failures remain blocking.
+- Added **Download acceptance evidence** to the authenticated dashboard and extended the existing
+  capture CLI with `--scenario-type CHECKOUT_ABANDON`. Incomplete downloads retain failed checks.
+  The validator accepts the telemetry label with its additional checks and continues to validate
+  legacy historical provider exports. Tokens, order IDs and recipient details stay out of captures.
+
+### Automated evidence (separate from provider rehearsal)
+
+Evidence directory: [`artifacts/track-a/`](../artifacts/track-a/).
+
+| Check | Result and limits |
+|---|---|
+| `make track-a-contract` | **58 passed**; two sanitized synthetic exports validated. Reuses existing hero-path tests, now selecting the abandonment scenario and exercising a valid original-order bootstrap before completion. |
+| Full Python coverage command | **297 passed, 8 PostgreSQL-only cases skipped; 88.85% coverage** above the 85% gate. Saved as `backend-coverage.log`. |
+| New targeted PostgreSQL regression | **2 passed** on fresh and frozen-upgrade disposable databases. Four concurrent deliveries produce one case and exactly one provider recheck; the scheduled selector no longer returns the resolved dismissal. The six pre-existing PostgreSQL tests were not repeated for this step. `postgres.log`. |
+| Browser UI checks | **9 groups passed, zero page errors**, including selection, duplicate close/offline queue/refresh, waiting/retry/pending states, original-order recheck, fixture verification/closure/export, new-demo selection, failure precedence, stale bootstrap, expiry/restart and 390px mobile layout without horizontal overflow. `browser/summary.json`. |
+| Browser visual review | Reviewed desktop waiting and mobile entry screenshots. Saved captures are visibly watermarked as simulated provider responses; API and SDK are intercepted and external browser requests blocked. |
+| TypeScript / production dashboard build | **PASS**, including the authenticated acceptance proxy. `dashboard-types.log`, `dashboard-build.log`. |
+| Ruff / whitespace | **PASS**; `lint.log` and `git diff --check`. |
+| Historical provider exports | **Both still validate** with the existing `make release-evidence` gate. `historical-artifacts-validation.log`. They were not recaptured or overwritten. |
+
+Contract exports are in `contract/`; the browser download check uses that same synthetic export and
+asserts its provenance stays synthetic. Neither browser screenshots nor these automated exports
+establish a real Razorpay transaction, current provider capture, recipient delivery or merchant
+revenue. The full isolated release gate from the foundation milestone was not repeated; this step
+ran the targeted requested gates plus the full Python coverage and dashboard build checks.
+
+Two older fake payment IDs were changed from hyphenated names to valid `pay_` IDs because the newly
+reconciled capture reads now pass through the existing foundation's strict provider ID validation.
+No provider result or signature was fabricated outside explicit test doubles.
+
+### Provider rehearsal (still open)
+
+**PENDING — requires a human Razorpay Test Mode payment.** No new order was created with the real
+provider, no human Checkout was completed, no current live acceptance artifact was generated, and
+no recipient message was sent during this step. The existing running application was not deployed,
+restarted or migrated; only disposable PostgreSQL test databases and a separate loopback dashboard
+were used for checks.
+
+The exact load/start, dismissal, waiting/refresh, original-order continuation, human test payment,
+and sanitized capture steps are in
+[the Track A runbook](API_RELEASE_RUNBOOK.md#track-a--current-checkout-abandonment-acceptance).
+Razorpay's official current instructions were checked on 2026-09-03: Netbanking offers a mock
+Success/Failure page; the listed domestic Visa test card is `4100 2800 0000 1007`, with a random CVV
+and future expiry. The application still requires server-verified capture before closing the case.
+Save the eventual new export to a new filename, require the telemetry-specific provenance plus
+all blocking checks, and update this provider status only after the actual rehearsal.
+
+Historical acceptance artifacts, the original running database, unrelated multi-resource work,
+and committed audit samples were preserved. No commit, push, public deployment, real payment or
+outbound message was performed for this implementation.

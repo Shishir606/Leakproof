@@ -1,3 +1,5 @@
+import type { DataProvenance } from "./resource-types";
+
 export type ArmMetrics = {
   eligible_cases: number;
   recovered_cases: number;
@@ -8,7 +10,7 @@ export type ArmMetrics = {
 
 export type Scoreboard = {
   run_id: string;
-  data_provenance: "LIVE_PROVIDER_VERIFIED" | "SIMULATED_END_TO_END" | "ARCHITECTURE_READY";
+  data_provenance: DataProvenance;
   merchant_id: string;
   synthetic: boolean;
   started_at: string;

@@ -1,3 +1,5 @@
+import type { DataProvenance, LeakType, SetupState, OrderRecoveryBootstrap } from "./resource-types";
+
 export type CheckoutEventType =
   | "checkout_opened"
   | "payment_attempt_started"
@@ -5,6 +7,9 @@ export type CheckoutEventType =
   | "checkout_completed";
 
 export type DemoSession = {
+  scenario_type: LeakType;
+  primary_entity_type: "order";
+  setup_state: SetupState;
   session_id: string;
   session_token: string;
   razorpay_key_id: string;
@@ -15,7 +20,7 @@ export type DemoSession = {
   email_mode: "allowlisted" | "preview_only";
 };
 
-export type RecoveryBootstrap = Omit<DemoSession, "session_token" | "email_mode">;
+export type RecoveryBootstrap = OrderRecoveryBootstrap;
 
 export type DemoSessionState =
   | "CREATED"
@@ -34,7 +39,7 @@ export type CaseInsight = {
 
 export type DemoCaseProjection = {
   case_id: string;
-  leak_type: "PAYMENT_FAILURE" | "CHECKOUT_ABANDON";
+  leak_type: LeakType;
   state: string;
   deterministic_diagnosis: null | {
     rule_id: string | null;
@@ -57,7 +62,7 @@ export type ProviderStatus = {
 
 export type RecoveryAction = {
   action_id: string | null;
-  action_type: "recovery_link" | "email_link";
+  action_type: "recovery_link" | "invoice_payment_link" | "subscription_method_update" | "email_link" | "merchant_review";
   status: string;
   scheduled_for: string;
   executed_at: string | null;
@@ -72,8 +77,20 @@ export type TimelineItem = {
   payload: Record<string, unknown>;
 };
 
+export type AbandonmentCheck = {
+  status: "idle" | "waiting" | "provider_recheck" | "provider_retry" | "provider_pending" | "confirmed" | "payment_failure" | "recovered";
+  due_at: string | null;
+  browser_dismissed_at: string | null;
+  unpaid_confirmed: boolean;
+};
+
 export type DemoSessionProjection = {
-  data_provenance: "LIVE_PROVIDER_VERIFIED" | "SIMULATED_END_TO_END" | "ARCHITECTURE_READY";
+  abandonment_check: AbandonmentCheck;
+  scenario_type: LeakType;
+  primary_entity_type: "order" | "invoice" | "subscription";
+  setup_state: SetupState;
+  capability_evidence: DataProvenance;
+  data_provenance: DataProvenance;
   session_id: string;
   state: DemoSessionState;
   amount_paise: number;

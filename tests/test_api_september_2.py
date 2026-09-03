@@ -434,3 +434,37 @@ def test_delivery_webhook_processed_before_send_receipt_is_reconciled(session_fa
 
         assert result.status == "delivered"
         assert delivery.status == "delivered"
+
+
+def test_expired_session_cancels_pending_email_without_provider_call(session_factory):
+    from leakproof.audit.timeline import replay_case
+    from leakproof.models.db import Event
+
+    config = settings()
+    provider = FakeEmailProvider()
+    with session_factory() as session:
+        created, case, action = create_case(session, config)
+        expired = NOW + timedelta(minutes=config.demo_session_ttl_minutes + 1)
+        for _ in range(2):
+            result = execute_demo_recovery_email(
+                session,
+                action.id,
+                provider=provider,
+                settings=config,
+                now=expired,
+            )
+            assert result.status == "cancelled"
+        assert session.get(DemoSession, created.session_id).state == "EXPIRED"
+        assert provider.calls == []
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(Event)
+                .where(
+                    Event.case_id == case.id,
+                    Event.kind == "ACTED",
+                )
+            )
+            == 1
+        )
+        assert replay_case(session, case.id).projection_matches

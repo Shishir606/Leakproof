@@ -11,6 +11,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Numeric,
@@ -76,6 +77,7 @@ class RecoveryCase(Base):
     __tablename__ = "cases"
     __table_args__ = (
         UniqueConstraint("merchant_id", "dedupe_key", name="uq_cases_merchant_dedupe"),
+        UniqueConstraint("id", "merchant_id", name="uq_cases_id_merchant"),
         Index("ix_cases_merchant_state", "merchant_id", "state"),
         Index("ix_cases_customer", "customer_id"),
         Index("ix_cases_batch_run", "batch_run_id"),
@@ -369,7 +371,32 @@ class PaymentAttemptObservation(Base):
 class DemoSession(Base):
     __tablename__ = "demo_sessions"
     __table_args__ = (
-        UniqueConstraint("razorpay_order_id", name="uq_demo_sessions_razorpay_order"),
+        UniqueConstraint(
+            "merchant_id",
+            "provider_mode",
+            "razorpay_order_id",
+            name="uq_demo_sessions_razorpay_order",
+        ),
+        UniqueConstraint("id", "merchant_id", "provider_mode", name="uq_demo_session_scope"),
+        CheckConstraint(
+            "primary_entity_type IN ('order', 'invoice', 'subscription')",
+            name="ck_demo_primary_type",
+        ),
+        CheckConstraint("provider_mode IN ('test', 'live')", name="ck_demo_provider_mode"),
+        CheckConstraint(
+            "setup_state IN ('CREATING', 'READY', 'ACTION_REQUIRED', 'FAILED', 'EXPIRED')",
+            name="ck_demo_setup_state",
+        ),
+        CheckConstraint(
+            "scenario_type IN ('PAYMENT_FAILURE','CHECKOUT_ABANDON','INVOICE_OVERDUE',"
+            "'SUBSCRIPTION_HALT','MANDATE_BROKEN')",
+            name="ck_demo_scenario",
+        ),
+        CheckConstraint(
+            "primary_entity_type != 'order' OR "
+            "(razorpay_order_id IS NOT NULL AND razorpay_order_id=primary_entity_id)",
+            name="ck_demo_order_compatibility",
+        ),
         Index("ix_demo_sessions_merchant_state", "merchant_id", "state"),
         Index("ix_demo_sessions_expires", "expires_at"),
         Index("ix_demo_sessions_recipient_hash", "recipient_hash"),
@@ -378,7 +405,19 @@ class DemoSession(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True)
     merchant_id: Mapped[str] = mapped_column(ForeignKey("merchants.id"), nullable=False)
     customer_id: Mapped[str] = mapped_column(ForeignKey("customers.id"), nullable=False)
-    razorpay_order_id: Mapped[str] = mapped_column(String, nullable=False)
+    razorpay_order_id: Mapped[str | None] = mapped_column(String)
+    scenario_type: Mapped[str] = mapped_column(String, default="PAYMENT_FAILURE", nullable=False)
+    primary_entity_type: Mapped[str] = mapped_column(String, default="order", nullable=False)
+    primary_entity_id: Mapped[str] = mapped_column(
+        String,
+        default=lambda ctx: ctx.get_current_parameters().get("razorpay_order_id"),
+        nullable=False,
+    )
+    provider_mode: Mapped[str] = mapped_column(String, default="test", nullable=False)
+    setup_state: Mapped[str] = mapped_column(String, default="READY", nullable=False)
+    capability_evidence: Mapped[str] = mapped_column(
+        String, default="ARCHITECTURE_READY", nullable=False
+    )
     amount_paise: Mapped[int] = mapped_column(BigInteger, nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
     state: Mapped[str] = mapped_column(
@@ -496,3 +535,145 @@ class CaseInsightRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
+
+
+class ProviderObligation(Base):
+    """One receivable and counted case owner across sessions and event surfaces."""
+
+    __tablename__ = "provider_obligations"
+    __table_args__ = (
+        UniqueConstraint(
+            "merchant_id",
+            "provider",
+            "mode",
+            "entity_type",
+            "provider_entity_id",
+            name="uq_obligation_identity",
+        ),
+        UniqueConstraint("id", "merchant_id", "provider", "mode", name="uq_obligation_scope"),
+        UniqueConstraint("case_id", name="uq_obligation_case"),
+        ForeignKeyConstraint(
+            ["case_id", "merchant_id"],
+            ["cases.id", "cases.merchant_id"],
+            name="fk_obligation_case_scope",
+        ),
+        CheckConstraint("entity_type IN ('order', 'invoice')", name="ck_obligation_type"),
+        CheckConstraint("mode IN ('test', 'live')", name="ck_obligation_mode"),
+        CheckConstraint(
+            "recovered_paise >= 0 AND baseline_paid_paise >= 0 AND "
+            "(detected_due_paise IS NULL OR recovered_paise <= detected_due_paise)",
+            name="ck_obligation_credit",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    merchant_id: Mapped[str] = mapped_column(ForeignKey("merchants.id"), nullable=False)
+    provider: Mapped[str] = mapped_column(String, nullable=False)
+    mode: Mapped[str] = mapped_column(String, nullable=False)
+    entity_type: Mapped[str] = mapped_column(String, nullable=False)
+    provider_entity_id: Mapped[str] = mapped_column(String, nullable=False)
+    case_id: Mapped[str | None] = mapped_column(ForeignKey("cases.id"))
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    baseline_paid_paise: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    detected_due_paise: Mapped[int | None] = mapped_column(BigInteger)
+    outstanding_paise: Mapped[int | None] = mapped_column(BigInteger)
+    recovered_paise: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    detected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reconciliation_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    alias_of: Mapped[str | None] = mapped_column(ForeignKey("provider_obligations.id"))
+
+
+class ProviderEntity(Base):
+    __tablename__ = "provider_entities"
+    __table_args__ = (
+        UniqueConstraint(
+            "merchant_id",
+            "provider",
+            "mode",
+            "entity_type",
+            "provider_entity_id",
+            name="uq_provider_entity_identity",
+        ),
+        ForeignKeyConstraint(
+            ["session_id", "merchant_id", "mode"],
+            ["demo_sessions.id", "demo_sessions.merchant_id", "demo_sessions.provider_mode"],
+            name="fk_provider_entity_session",
+        ),
+        ForeignKeyConstraint(
+            ["obligation_id", "merchant_id", "provider", "mode"],
+            [
+                "provider_obligations.id",
+                "provider_obligations.merchant_id",
+                "provider_obligations.provider",
+                "provider_obligations.mode",
+            ],
+            name="fk_provider_entity_obligation",
+        ),
+        CheckConstraint(
+            "entity_type IN ('order', 'invoice', 'subscription', 'payment', 'token')",
+            name="ck_provider_entity_type",
+        ),
+        Index("ix_provider_entities_session", "session_id"),
+        Index(
+            "ix_provider_entities_root",
+            "merchant_id",
+            "provider",
+            "mode",
+            "root_entity_type",
+            "root_entity_id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BIGINT_PK, primary_key=True, autoincrement=True)
+    merchant_id: Mapped[str] = mapped_column(ForeignKey("merchants.id"), nullable=False)
+    session_id: Mapped[str | None] = mapped_column(String)
+    provider: Mapped[str] = mapped_column(String, nullable=False)
+    mode: Mapped[str] = mapped_column(String, nullable=False)
+    entity_type: Mapped[str] = mapped_column(String, nullable=False)
+    provider_entity_id: Mapped[str] = mapped_column(String, nullable=False)
+    role: Mapped[str] = mapped_column(String, nullable=False)
+    root_entity_type: Mapped[str | None] = mapped_column(String)
+    root_entity_id: Mapped[str | None] = mapped_column(String)
+    obligation_id: Mapped[str | None] = mapped_column(String)
+    status: Mapped[str | None] = mapped_column(String)
+    state_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    safe_metadata: Mapped[dict[str, Any]] = mapped_column(JSON_TYPE, default=dict, nullable=False)
+
+
+class Settlement(Base):
+    """Unique captured payment; surface events are observations, never new credit."""
+
+    __tablename__ = "provider_settlements"
+    __table_args__ = (
+        UniqueConstraint(
+            "merchant_id", "provider", "mode", "payment_id", name="uq_provider_settlement_payment"
+        ),
+        ForeignKeyConstraint(
+            ["obligation_id", "merchant_id", "provider", "mode"],
+            [
+                "provider_obligations.id",
+                "provider_obligations.merchant_id",
+                "provider_obligations.provider",
+                "provider_obligations.mode",
+            ],
+            name="fk_settlement_obligation",
+        ),
+        CheckConstraint(
+            "amount_paise >= 0 AND credited_paise >= 0 AND credited_paise <= amount_paise",
+            name="ck_settlement_credit",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BIGINT_PK, primary_key=True, autoincrement=True)
+    merchant_id: Mapped[str] = mapped_column(String, nullable=False)
+    provider: Mapped[str] = mapped_column(String, nullable=False)
+    mode: Mapped[str] = mapped_column(String, nullable=False)
+    payment_id: Mapped[str] = mapped_column(String, nullable=False)
+    obligation_id: Mapped[str] = mapped_column(String, nullable=False)
+    amount_paise: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    credited_paise: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    credited_action_id: Mapped[str | None] = mapped_column(ForeignKey("actions.id"))
+    organic: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

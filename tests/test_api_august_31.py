@@ -460,8 +460,8 @@ def test_expired_token_and_paid_order_fail_closed(session_factory):
         valid = issue_demo_recovery_token(
             session, demo.id, settings=config, now=NOW + timedelta(seconds=2)
         )
-        provider.payments["pay-authorized"] = Payment(
-            id="pay-authorized",
+        provider.payments["pay_authorized"] = Payment(
+            id="pay_authorized",
             order_id=demo.razorpay_order_id,
             amount_paise=demo.amount_paise,
             currency=demo.currency,
@@ -496,3 +496,87 @@ def test_recovery_route_returns_checkout_bootstrap(client, session_factory):
     assert response.json()["session_id"] == created["session_id"]
     assert response.json()["razorpay_order_id"] == created["razorpay_order_id"]
     assert response.json()["amount_paise"] == created["amount_paise"]
+
+
+@pytest.mark.parametrize("finish_via", ["worker", "recovery_bootstrap"])
+def test_capture_recheck_closes_same_case_and_cancels_contact(session_factory, finish_via):
+    from leakproof.demo.service import due_abandonment_checks
+
+    with session_factory() as session:
+        created, provider, config = create_session(session)
+        case_id = create_abandonment(session, created, provider, config)
+        diagnose_case(session, case_id)
+        email = schedule_demo_recovery_email(session, case_id, settings=config, now=NOW)
+        # A new dismissal is pending while the original abandonment case is already at risk.
+        dismissed = ingest_checkout_event(
+            session,
+            created.session_id,
+            CheckoutEventRequest(
+                client_event_id="new-dismissal", event_type="checkout_dismissed", occurred_at=NOW
+            ),
+            session_token=created.session_token,
+            limiter=InMemoryRateLimiter(),
+            settings=config,
+            now=NOW + timedelta(seconds=40),
+        )
+        due = NOW + timedelta(seconds=71)
+        assert due_abandonment_checks(session, settings=config, now=due) == [
+            (created.session_id, dismissed.dismissal_event_id)
+        ]
+        provider.payments["pay_capture_recheck"] = Payment(
+            id="pay_capture_recheck",
+            order_id=created.razorpay_order_id,
+            amount_paise=created.amount_paise,
+            currency="INR",
+            status="authorized",
+        )
+        assert (
+            materialize_checkout_abandonment(
+                session,
+                created.session_id,
+                dismissed.dismissal_event_id,
+                provider=provider,
+                settings=config,
+                now=due,
+            )
+            is None
+        )
+        from leakproof.demo.projection import get_demo_session_projection
+
+        projection = get_demo_session_projection(
+            session,
+            created.session_id,
+            session_token=created.session_token,
+            settings=config,
+            now=due,
+        )
+        assert projection.abandonment_check.status == "provider_pending"
+        assert projection.recovery_path is None
+        assert email.status == "pending"
+        assert due_abandonment_checks(session, settings=config, now=due)
+        provider.payments["pay_capture_recheck"] = Payment(
+            id="pay_capture_recheck",
+            order_id=created.razorpay_order_id,
+            amount_paise=created.amount_paise,
+            currency="INR",
+            status="captured",
+        )
+        if finish_via == "worker":
+            materialize_checkout_abandonment(
+                session,
+                created.session_id,
+                dismissed.dismissal_event_id,
+                provider=provider,
+                settings=config,
+                now=due,
+            )
+        else:
+            token = issue_demo_recovery_token(session, created.session_id, settings=config, now=due)
+            with pytest.raises(RecoveryOrderNotAvailable):
+                get_recovery_bootstrap(session, token, provider=provider, settings=config, now=due)
+        assert session.get(DemoSession, created.session_id).state == "RECOVERED"
+        assert session.get(RecoveryCase, case_id).state == "CLOSED"
+        assert email.status == "cancelled"
+        assert not due_abandonment_checks(session, settings=config, now=due)
+        assert session.scalar(select(func.count()).select_from(RecoveryCase)) == 1
+        assert replay_case(session, case_id).projection_matches

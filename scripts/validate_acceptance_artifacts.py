@@ -29,6 +29,12 @@ REQUIRED_CHECKS = {
     "audit_projection_replay_matches",
     "no_blocking_provider_failure",
 }
+ABANDONMENT_CHECKS = {
+    "browser_dismissal_recorded",
+    "unpaid_order_rechecked",
+    "original_order_reopened",
+}
+
 FORBIDDEN_KEY_FRAGMENTS = {
     "action_id",
     "attempt_id",
@@ -85,7 +91,12 @@ def validate_file(path: Path, *, require_live: bool) -> DemoAcceptanceExport:
         raise ValueError(f"{path}: invalid acceptance artifact: {exc}") from exc
 
     checks = {item.check: item for item in artifact.checks}
-    missing = sorted(REQUIRED_CHECKS - checks.keys())
+    required = REQUIRED_CHECKS.copy()
+    if artifact.data_provenance == DataProvenance.LIVE_TELEMETRY_PROVIDER_RECONCILED:
+        required |= ABANDONMENT_CHECKS
+        if artifact.case is None or artifact.case.leak_type != "CHECKOUT_ABANDON":
+            errors.append("telemetry-reconciled evidence requires a checkout-abandonment case")
+    missing = sorted(required - checks.keys())
     if missing:
         errors.append("missing required checks: " + ", ".join(missing))
     failed = sorted(
@@ -95,8 +106,11 @@ def validate_file(path: Path, *, require_live: bool) -> DemoAcceptanceExport:
         errors.append("blocking checks failed: " + ", ".join(failed))
     if not artifact.passed:
         errors.append("artifact passed flag is false")
-    if require_live and artifact.data_provenance != DataProvenance.LIVE_PROVIDER_VERIFIED:
-        errors.append("artifact is not LIVE_PROVIDER_VERIFIED")
+    if require_live and artifact.data_provenance not in {
+        DataProvenance.LIVE_PROVIDER_VERIFIED,
+        DataProvenance.LIVE_TELEMETRY_PROVIDER_RECONCILED,
+    }:
+        errors.append("artifact is not live provider evidence")
 
     if errors:
         raise ValueError(f"{path}: " + "; ".join(errors))

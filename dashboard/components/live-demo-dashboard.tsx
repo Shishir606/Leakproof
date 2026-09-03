@@ -2,20 +2,20 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { createSession, DemoApiError, getSessionProjection } from "@/lib/demo-api";
+import { downloadAcceptance } from "@/lib/demo-api";
 import type {
   DemoSession,
-  DemoSessionProjection,
   ProviderStatus,
   TimelineItem,
 } from "@/lib/demo-types";
+import { useSessionProjection } from "@/lib/use-session-projection";
+import { AbandonmentStatus } from "@/components/abandonment-status";
 import { label, money, percent } from "@/lib/format";
 
 const SESSION_STORAGE_KEY = "leakproof:active-demo-session";
-const ACTIVE_STATES = new Set(["CREATED", "CHECKOUT_OPEN", "AT_RISK"]);
 const SOURCE_LABELS: Record<TimelineItem["source"], string> = {
   browser: "Browser Telemetry",
-  razorpay: "Razorpay Webhook",
+  razorpay: "Razorpay API / webhook",
   openai: "Luna",
   resend: "Resend",
   leakproof: "Leakproof",
@@ -79,10 +79,10 @@ function EmptyLiveDemo() {
 
 export function LiveDemoDashboard() {
   const [session, setSession] = useState<DemoSession | null>(null);
-  const [projection, setProjection] = useState<DemoSessionProjection | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { projection, error: pollError, expired } = useSessionProjection(session);
   const [loading, setLoading] = useState(true);
   const [startingNew, setStartingNew] = useState(false);
+  const [captureMessage, setCaptureMessage] = useState<string | null>(null);
 
   useEffect(() => {
     try {
@@ -101,56 +101,13 @@ export function LiveDemoDashboard() {
     }
   }, []);
 
-  useEffect(() => {
-    if (!session) return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-
-    const poll = async () => {
-      try {
-        const next = await getSessionProjection(session);
-        if (cancelled) return;
-        if (next.data_provenance !== "LIVE_PROVIDER_VERIFIED") {
-          throw new DemoApiError(
-            `Live Demo rejected ${next.data_provenance} data. Use Scenario Lab for simulated results.`,
-            "provenance_mismatch",
-          );
-        }
-        setProjection(next);
-        setError(null);
-        const unexpired = new Date(next.expires_at).getTime() > Date.now();
-        if (ACTIVE_STATES.has(next.state) && unexpired) {
-          timer = setTimeout(poll, 2_000);
-        } else {
-          sessionStorage.removeItem(SESSION_STORAGE_KEY);
-        }
-      } catch (caught) {
-        if (cancelled) return;
-        setError(
-          caught instanceof DemoApiError || caught instanceof Error
-            ? caught.message
-            : "The live projection is unavailable.",
-        );
-        if (new Date(session.expires_at).getTime() > Date.now()) {
-          timer = setTimeout(poll, 2_000);
-        }
-      }
-    };
-
-    void poll();
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-    };
-  }, [session]);
-
   if (loading) return <section className="live-empty"><p>Loading active session…</p></section>;
   if (!session) return <EmptyLiveDemo />;
   if (!projection) {
     return (
       <section className="live-empty">
         <p className="eyebrow">Connecting to recovery spine</p>
-        <h2>{error ?? "Reading the live session…"}</h2>
+        <h2>{expired ? "Session expired. Start a new rehearsal." : pollError ?? "Reading the live session…"}</h2>
         <Link className="live-primary-link" href="/demo">Return to checkout <span>→</span></Link>
       </section>
     );
@@ -180,25 +137,16 @@ export function LiveDemoDashboard() {
   ];
   const firstIncomplete = stages.findIndex((stage) => !stage.complete);
 
-  const startNewDemo = async () => {
+  const startNewDemo = () => {
     if (startingNew) return;
     setStartingNew(true);
     sessionStorage.removeItem(SESSION_STORAGE_KEY);
-    try {
-      const next = await createSession();
-      sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(next));
-      window.location.assign("/demo");
-    } catch (caught) {
-      setError(
-        caught instanceof Error ? caught.message : "A new demo session could not be created.",
-      );
-      setStartingNew(false);
-    }
+    window.location.assign("/demo");
   };
 
   return (
     <div className="live-dashboard">
-      {error && <div className="live-warning" role="status">Polling delayed: {error}</div>}
+      {pollError && <div className="live-warning" role="status">{expired ? "Session expired. Recovery is disabled; start a new demo." : `Polling delayed: ${pollError}`}</div>}
       <header className="live-header">
         <div>
           <p className="eyebrow">Public recovery · live API</p>
@@ -216,6 +164,18 @@ export function LiveDemoDashboard() {
           </button>
         </div>
       </header>
+
+      {!expired && <AbandonmentStatus check={projection.abandonment_check} />}
+
+      <div className="acceptance-capture">
+        <button className="checkout-secondary" type="button" disabled={expired} onClick={async () => {
+          try {
+            const passed = await downloadAcceptance(session);
+            setCaptureMessage(passed ? "Acceptance export downloaded. All blocking checks passed." : "Incomplete rehearsal exported. The file records which acceptance checks remain open.");
+          } catch (caught) { setCaptureMessage(caught instanceof Error ? caught.message : "Export unavailable."); }
+        }}>Download acceptance evidence</button>
+        {captureMessage && <p role="status">{captureMessage}</p>}
+      </div>
 
       <ol className="session-progress" aria-label="Recovery progress">
         {stages.map((stage, index) => (
@@ -313,7 +273,7 @@ export function LiveDemoDashboard() {
                   <div><strong>{label(action.action_type)}</strong><small>{action.action_type === "recovery_link" ? "Customer-authorized original order" : `Due ${time(action.scheduled_for)}`}</small></div>
                   <span className={`action-status status-${action.status}`}>{label(action.status)}</span>
                   <div className="live-action-receipt"><span>Gate</span><strong>{action.gate_verdict ? label(action.gate_verdict) : "Pending"}</strong><small>{action.provider_receipt_id ? `Receipt …${action.provider_receipt_id.slice(-10)}` : "No provider receipt"}</small></div>
-                  {action.action_type === "recovery_link" && projection.recovery_path && (
+                  {action.action_type === "recovery_link" && projection.recovery_path && !expired && (
                     <Link className="continue-recovery" href={projection.recovery_path}>
                       Continue recovery <span>→</span>
                     </Link>

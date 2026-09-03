@@ -173,3 +173,14 @@ seed:
 
 batch:
 	LEAKPROOF_DATABASE_URL=postgresql+psycopg://leakproof:leakproof@localhost:55432/leakproof uv run python scripts/run_batch.py
+
+.PHONY: track-a-contract track-a-browser
+TRACK_A_ARTIFACT_DIR ?= artifacts/track-a
+TRACK_A_BROWSER_URL ?= http://127.0.0.1:3100
+
+track-a-contract:
+	uv run pytest tests/test_api_august_30.py tests/test_api_august_31.py tests/test_api_september_2.py tests/test_api_september_4.py tests/test_acceptance_artifacts.py --acceptance-output-dir $(TRACK_A_ARTIFACT_DIR)/contract
+	uv run python scripts/validate_acceptance_artifacts.py --directory $(TRACK_A_ARTIFACT_DIR)/contract
+
+track-a-browser:
+	uv run python scripts/check_track_a_browser.py --base-url $(TRACK_A_BROWSER_URL) --output-dir $(TRACK_A_ARTIFACT_DIR)/browser

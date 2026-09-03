@@ -134,3 +134,97 @@ class CohortAnalysisResult:
 @runtime_checkable
 class CohortAnalysisProvider(Protocol):
     def analyze_cohort(self, request: CohortAnalysisRequest) -> CohortAnalysisResult: ...
+
+
+# Small boundaries for later adapters. Declaring a protocol does not enable a surface.
+OrderPaymentProvider = PaymentProvider
+
+
+from pydantic import Field, model_validator  # noqa: E402
+
+from leakproof.models.resources import EntityRef, ResourceContract  # noqa: E402
+
+
+class Invoice(ResourceContract):
+    request_id: str | None = None
+    id: str = Field(pattern=r"^inv_[A-Za-z0-9_]+$")
+    order_id: str | None = Field(default=None, pattern=r"^order_[A-Za-z0-9_]+$")
+    subscription_id: str | None = Field(default=None, pattern=r"^sub_[A-Za-z0-9_]+$")
+    status: Literal["draft", "issued", "partially_paid", "paid", "cancelled", "expired", "deleted"]
+    amount_paise: int = Field(ge=0)
+    amount_paid_paise: int = Field(ge=0)
+    amount_due_paise: int = Field(ge=0)
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    short_url: str | None = Field(default=None, pattern=r"^https://")
+
+    @model_validator(mode="after")
+    def balanced(self):
+        if self.amount_paid_paise + self.amount_due_paise != self.amount_paise:
+            raise ValueError("invoice balance mismatch")
+        if self.status == "paid" and self.amount_due_paise:
+            raise ValueError("paid invoice has an outstanding balance")
+        return self
+
+
+class Subscription(ResourceContract):
+    request_id: str | None = None
+    id: str = Field(pattern=r"^sub_[A-Za-z0-9_]+$")
+    status: Literal[
+        "created",
+        "authenticated",
+        "active",
+        "pending",
+        "halted",
+        "cancelled",
+        "completed",
+        "expired",
+        "paused",
+    ]
+    plan_id: str = Field(pattern=r"^plan_[A-Za-z0-9_]+$")
+    payment_method: Literal["card", "upi", "emandate"] | None = None
+    # An explicit invoice identifies the affected cycle, never paid_count.
+    affected_invoice_id: str | None = Field(default=None, pattern=r"^inv_[A-Za-z0-9_]+$")
+
+
+class ProviderEntityStatus(ResourceContract):
+    entity: EntityRef
+    status: str = Field(min_length=1, max_length=80)
+    root: EntityRef | None = None
+
+
+class CreateInvoiceRequest(ResourceContract):
+    amount_paise: int = Field(gt=0)
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    receipt: str = Field(min_length=1, max_length=40)
+    customer_id: str = Field(pattern=r"^cust_[A-Za-z0-9_]+$")
+    line_item_name: str = Field(min_length=1, max_length=80)
+    notify_customer: Literal[False] = False
+    idempotency_key: str = Field(min_length=1, max_length=160)
+
+
+class CreateSubscriptionRequest(ResourceContract):
+    plan_id: str = Field(pattern=r"^plan_[A-Za-z0-9_]+$")
+    total_count: int = Field(gt=0)
+    customer_notify: Literal[False] = False
+
+
+@runtime_checkable
+class InvoiceProvider(Protocol):
+    def create_invoice(self, request: CreateInvoiceRequest) -> Invoice: ...
+
+    def issue_invoice(self, invoice_id: str) -> Invoice: ...
+
+    def fetch_invoice(self, invoice_id: str) -> Invoice: ...
+
+    def list_invoices(self, *, subscription_id: str | None = None) -> list[Invoice]: ...
+
+
+@runtime_checkable
+class SubscriptionProvider(Protocol):
+    def create_subscription(self, request: CreateSubscriptionRequest) -> Subscription: ...
+
+    def fetch_subscription(self, subscription_id: str) -> Subscription: ...
+
+    def list_subscriptions(self) -> list[Subscription]: ...
+
+    def list_subscription_invoices(self, subscription_id: str) -> list[Invoice]: ...

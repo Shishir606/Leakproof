@@ -47,6 +47,14 @@ from leakproof.models.db import (
     RecoveryCase,
 )
 from leakproof.models.domain import Arm, LeakType
+from leakproof.models.resources import ObligationRef, ProviderScope, RecoveryPurpose
+from leakproof.provenance import DataProvenance
+from leakproof.provider_resources import (
+    get_obligation,
+    needs_payment_reconciliation,
+    order_recovery_supported,
+    register_entity,
+)
 from leakproof.providers import CreateOrderRequest, PaymentProvider, ProviderError
 from leakproof.sensors.processor import promote_abandonment_case
 from leakproof.services import (
@@ -184,6 +192,8 @@ def create_demo_session(
     settings: Settings,
     now: datetime | None = None,
 ) -> DemoSessionCreated:
+    if request.scenario_type not in {LeakType.PAYMENT_FAILURE, LeakType.CHECKOUT_ABANDON}:
+        raise ValueError("scenario_not_implemented")
     now = _as_utc(now or datetime.now(UTC))
     secret = _signing_secret(settings)
     decision = limiter.allow(
@@ -257,6 +267,16 @@ def create_demo_session(
         merchant_id=merchant_id,
         customer_id=customer_id,
         razorpay_order_id=order.id,
+        scenario_type=request.scenario_type,
+        primary_entity_type="order",
+        primary_entity_id=order.id,
+        provider_mode="test",
+        setup_state="READY",
+        capability_evidence=(
+            DataProvenance.ARCHITECTURE_READY
+            if settings.mode == "live_demo"
+            else DataProvenance.SIMULATED_END_TO_END
+        ),
         amount_paise=settings.demo_amount_paise,
         currency=settings.demo_currency,
         state=DemoSessionState.CREATED.value,
@@ -272,6 +292,10 @@ def create_demo_session(
     )
     session.add(demo)
     session.flush()
+    scope = ProviderScope(merchant_id=merchant_id)
+    ref = ObligationRef(entity_type="order", entity_id=order.id)
+    obligation = get_obligation(session, scope, ref, demo.currency)
+    register_entity(session, scope, ref, session_id=demo.id, obligation=obligation, role="primary")
     _record_provider_call(
         session,
         session_id=session_id,
@@ -289,6 +313,7 @@ def create_demo_session(
     session.commit()
 
     return DemoSessionCreated(
+        scenario_type=request.scenario_type,
         session_id=session_id,
         session_token=issue_session_token(session_id, merchant_id, expires_at, secret),
         razorpay_key_id=settings.razorpay_key_id or "rzp_test_simulated",
@@ -319,6 +344,8 @@ def issue_demo_recovery_token(
         DemoSessionState.CHECKOUT_OPEN,
     }:
         raise RecoveryOrderNotAvailable("the order is not available for recovery")
+    if not order_recovery_supported(session, demo):
+        raise RecoveryOrderNotAvailable("this recovery surface is not implemented")
     return issue_recovery_token(
         demo.id,
         demo.merchant_id,
@@ -327,6 +354,7 @@ def issue_demo_recovery_token(
         demo.currency,
         now + timedelta(minutes=30),
         _signing_secret(settings),
+        scenario_type=LeakType(demo.scenario_type),
     )
 
 
@@ -341,7 +369,12 @@ def get_recovery_bootstrap(
     """Verify all token bindings and re-read payment truth before reopening Checkout."""
     now = _as_utc(now or datetime.now(UTC))
     try:
-        claims = verify_recovery_token(signed_token, _signing_secret(settings), now=now)
+        claims = verify_recovery_token(
+            signed_token,
+            _signing_secret(settings),
+            now=now,
+            expected_purpose=RecoveryPurpose.ORDER_CHECKOUT,
+        )
     except RecoveryTokenExpired as exc:
         raise RecoveryExpired("recovery token has expired") from exc
     except InvalidRecoveryToken as exc:
@@ -352,6 +385,9 @@ def get_recovery_bootstrap(
     )
     if demo is None or (
         demo.merchant_id != claims.merchant_id
+        or not order_recovery_supported(session, demo)
+        or demo.primary_entity_id != claims.entity.entity_id
+        or (claims.version == 2 and demo.scenario_type != claims.scenario_type)
         or demo.razorpay_order_id != claims.order_id
         or demo.amount_paise != claims.amount_paise
         or demo.currency != claims.currency
@@ -390,7 +426,12 @@ def get_recovery_bootstrap(
         session.commit()
         raise
 
-    if any(payment.order_id != demo.razorpay_order_id for payment in payments):
+    if any(
+        payment.order_id != demo.razorpay_order_id
+        or payment.amount_paise != demo.amount_paise
+        or payment.currency != demo.currency
+        for payment in payments
+    ):
         raise ProviderError(
             provider="razorpay",
             operation="recovery_order_check",
@@ -411,7 +452,10 @@ def get_recovery_bootstrap(
             "statuses": sorted({item.status for item in payments}),
         },
     )
-    if any(payment.status in {"authorized", "captured"} for payment in payments):
+    captured = next((payment for payment in payments if payment.status == "captured"), None)
+    if captured:
+        reconcile_demo_capture(session, demo, captured, now)
+    if any(payment.status != "failed" for payment in payments):
         session.commit()
         raise RecoveryOrderNotAvailable("the order is no longer available for recovery")
 
@@ -453,6 +497,8 @@ def ingest_checkout_event(
     demo = session.scalar(select(DemoSession).where(DemoSession.id == session_id).with_for_update())
     if demo is None or claims.merchant_id != demo.merchant_id:
         raise DemoSessionUnauthorized("invalid session token")
+    if not order_recovery_supported(session, demo):
+        raise DemoSessionUnauthorized("session does not support order checkout")
     if _as_utc(demo.expires_at) <= now or DemoSessionState(demo.state) == DemoSessionState.EXPIRED:
         if DemoSessionState(demo.state) != DemoSessionState.EXPIRED:
             demo.state = DemoSessionState.EXPIRED.value
@@ -551,7 +597,9 @@ def verify_checkout_payment(
         recovery_claims = None
     elif recovery_token:
         try:
-            recovery_claims = verify_recovery_token(recovery_token, secret, now=now)
+            recovery_claims = verify_recovery_token(
+                recovery_token, secret, now=now, expected_purpose=RecoveryPurpose.ORDER_CHECKOUT
+            )
         except RecoveryTokenExpired as exc:
             raise DemoSessionExpired("recovery token has expired") from exc
         except InvalidRecoveryToken as exc:
@@ -565,8 +613,12 @@ def verify_checkout_payment(
     demo = session.scalar(select(DemoSession).where(DemoSession.id == session_id).with_for_update())
     if demo is None or demo.merchant_id != authorized_merchant_id:
         raise DemoSessionUnauthorized("invalid payment verification token")
+    if not order_recovery_supported(session, demo):
+        raise DemoSessionUnauthorized("session does not support order checkout")
     if recovery_claims is not None and (
-        recovery_claims.order_id != demo.razorpay_order_id
+        (recovery_claims.version == 2 and recovery_claims.scenario_type != demo.scenario_type)
+        or recovery_claims.entity.entity_id != demo.primary_entity_id
+        or recovery_claims.order_id != demo.razorpay_order_id
         or recovery_claims.amount_paise != demo.amount_paise
         or recovery_claims.currency != demo.currency
     ):
@@ -616,7 +668,9 @@ def verify_checkout_payment(
         session.commit()
         raise CheckoutPaymentProofInvalid("checkout payment proof is invalid") from exc
 
-    if DemoSessionState(demo.state) == DemoSessionState.RECOVERED:
+    if DemoSessionState(
+        demo.state
+    ) == DemoSessionState.RECOVERED and not needs_payment_reconciliation(session, demo):
         return CheckoutPaymentVerificationReceipt(duplicate=True)
 
     try:
@@ -707,7 +761,7 @@ def materialize_checkout_abandonment(
 ) -> str | None:
     now = _as_utc(now or datetime.now(UTC))
     demo = session.scalar(select(DemoSession).where(DemoSession.id == session_id).with_for_update())
-    if demo is None:
+    if demo is None or not order_recovery_supported(session, demo):
         return None
     state = DemoSessionState(demo.state)
     if state in {DemoSessionState.RECOVERED, DemoSessionState.EXPIRED}:
@@ -732,21 +786,10 @@ def materialize_checkout_abandonment(
     )
     if now < due_at:
         return None
-    invalidated = session.scalar(
-        select(CheckoutEvent.id)
-        .where(
-            CheckoutEvent.session_id == session_id,
-            CheckoutEvent.received_at > dismissal.received_at,
-            CheckoutEvent.event_type.in_(
-                [
-                    CheckoutEventType.PAYMENT_ATTEMPT_STARTED.value,
-                    CheckoutEventType.CHECKOUT_COMPLETED.value,
-                ]
-            ),
-        )
-        .limit(1)
-    )
-    if invalidated is not None:
+    # Server receipt order (including equal timestamps) is authoritative. Reopening,
+    # a new attempt, completion, or a newer dismissal supersedes this timer.
+    latest = latest_checkout_event(session, session_id)
+    if latest is None or latest.id != dismissal.id:
         return None
 
     key = live_case_dedupe_key(session_id, demo.razorpay_order_id)
@@ -769,51 +812,62 @@ def materialize_checkout_abandonment(
         session.commit()
         return existing.id
 
+    checked = session.scalar(
+        select(ProviderCall.id).where(
+            ProviderCall.session_id == demo.id,
+            ProviderCall.operation == "list_order_payments",
+            ProviderCall.status == "succeeded",
+            ProviderCall.safe_response_metadata["dismissal_event_id"].as_integer() == dismissal.id,
+            ProviderCall.safe_response_metadata["check_resolved"].as_boolean().is_(True),
+        )
+    )
+    if checked is not None:
+        return existing.id if existing else None
+
     started = time.perf_counter()
     try:
         payments = provider.list_order_payments(demo.razorpay_order_id)
+        if any(
+            payment.order_id != demo.razorpay_order_id
+            or payment.amount_paise != demo.amount_paise
+            or payment.currency != demo.currency
+            for payment in payments
+        ):
+            raise ProviderError(
+                provider="razorpay", operation="list_order_payments",
+                error_class="response_mismatch", retryable=False,
+                message="Razorpay payment state did not match the demo order",
+            )
     except ProviderError as exc:
         _record_provider_call(
-            session,
-            session_id=demo.id,
-            provider="razorpay",
-            operation="list_order_payments",
-            request_id=exc.request_id,
+            session, session_id=demo.id, provider="razorpay",
+            operation="list_order_payments", request_id=exc.request_id,
             latency_ms=round((time.perf_counter() - started) * 1000),
-            status="failed",
-            metadata={},
+            status="failed", metadata={"dismissal_event_id": dismissal.id},
             error_class=exc.error_class,
         )
         session.commit()
         raise
+    pending = any(payment.status not in {"captured", "failed"} for payment in payments)
+    captured = next((payment for payment in payments if payment.status == "captured"), None)
     _record_provider_call(
-        session,
-        session_id=demo.id,
-        provider="razorpay",
-        operation="list_order_payments",
+        session, session_id=demo.id, provider="razorpay", operation="list_order_payments",
         request_id=next((item.request_id for item in payments if item.request_id), None),
-        latency_ms=round((time.perf_counter() - started) * 1000),
-        status="succeeded",
+        latency_ms=round((time.perf_counter() - started) * 1000), status="succeeded",
         metadata={
+            "dismissal_event_id": dismissal.id,
             "payment_count": len(payments),
             "statuses": sorted({item.status for item in payments}),
+            "check_resolved": not pending or captured is not None,
+            "unpaid_confirmed": not payments,
         },
     )
-    if any(
-        payment.order_id != demo.razorpay_order_id
-        or payment.amount_paise != demo.amount_paise
-        or payment.currency != demo.currency
-        for payment in payments
-    ):
+    if captured is not None:
+        # Provider capture is authoritative even when the browser callback/webhook was lost.
+        reconcile_demo_capture(session, demo, captured, now)
         session.commit()
-        raise ProviderError(
-            provider="razorpay",
-            operation="list_order_payments",
-            error_class="response_mismatch",
-            retryable=False,
-            message="Razorpay payment state did not match the demo order",
-        )
-    if any(payment.status in {"captured", "authorized"} for payment in payments):
+        return None
+    if pending:
         session.commit()
         return None
     failed_payment = next(
@@ -868,6 +922,9 @@ def materialize_checkout_abandonment(
             arm_override=Arm.TREATMENT,
         )
     case, _ = record_signal(session, signal)
+    if case is None:
+        session.commit()
+        return None
     if signal.leak_type == LeakType.PAYMENT_FAILURE:
         promote_abandonment_case(session, case, signal)
     assert_session_transition(DemoSessionState(demo.state), DemoSessionState.AT_RISK)
@@ -875,6 +932,28 @@ def materialize_checkout_abandonment(
     demo.updated_at = now
     session.commit()
     return case.id
+
+
+def reconcile_demo_capture(session: Session, demo: DemoSession, payment, now: datetime) -> None:
+    record_paid_signal(
+        session,
+        PaidSignal(
+            merchant_id=demo.merchant_id, customer_id=demo.customer_id,
+            entity_id=payment.id, entity_root_id=demo.razorpay_order_id,
+            amount_paise=payment.amount_paise, currency=payment.currency,
+            evidence={"source": "razorpay_payment_api", "payment_status": "captured"},
+            occurred_at=now,
+        ),
+    )
+    demo.state = DemoSessionState.RECOVERED.value
+    demo.updated_at = now
+
+
+def latest_checkout_event(session: Session, session_id: str) -> CheckoutEvent | None:
+    return session.scalar(
+        select(CheckoutEvent).where(CheckoutEvent.session_id == session_id)
+        .order_by(CheckoutEvent.id.desc()).limit(1)
+    )
 
 
 def due_abandonment_checks(
@@ -894,22 +973,29 @@ def due_abandonment_checks(
         .where(
             dismissal.event_type == CheckoutEventType.CHECKOUT_DISMISSED.value,
             dismissal.received_at <= cutoff,
-            DemoSession.state.in_(
-                [DemoSessionState.CREATED.value, DemoSessionState.CHECKOUT_OPEN.value]
-            ),
+            DemoSession.state.in_(["CREATED", "CHECKOUT_OPEN", "AT_RISK"]),
             DemoSession.expires_at > now,
-            ~select(later.id)
-            .where(
-                later.session_id == dismissal.session_id,
-                later.received_at > dismissal.received_at,
-                later.event_type.in_(
-                    [
-                        CheckoutEventType.PAYMENT_ATTEMPT_STARTED.value,
-                        CheckoutEventType.CHECKOUT_COMPLETED.value,
-                    ]
+            ~select(later.id).where(
+                later.session_id == dismissal.session_id, later.id > dismissal.id,
+            ).exists(),
+            ~select(ProviderCall.id).where(
+                ProviderCall.session_id == dismissal.session_id,
+                ProviderCall.operation == "list_order_payments",
+                ProviderCall.status == "succeeded",
+                ProviderCall.safe_response_metadata["dismissal_event_id"].as_integer()
+                == dismissal.id,
+                ProviderCall.safe_response_metadata["check_resolved"].as_boolean().is_(True),
+            ).exists(),
+            ~select(RecoveryCase.id).where(
+                RecoveryCase.merchant_id == DemoSession.merchant_id,
+                or_(
+                    RecoveryCase.dedupe_key == "live:" + DemoSession.id + ":"
+                    + DemoSession.razorpay_order_id,
+                    RecoveryCase.dedupe_key == "pf:" + DemoSession.customer_id + ":"
+                    + DemoSession.razorpay_order_id,
                 ),
-            )
-            .exists(),
+                RecoveryCase.leak_type == "PAYMENT_FAILURE",
+            ).exists(),
         )
         .order_by(dismissal.received_at, dismissal.id)
         .limit(limit)

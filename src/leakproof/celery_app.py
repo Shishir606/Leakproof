@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 
 from celery import Celery
@@ -199,9 +200,14 @@ def check_demo_abandonment(session_id: str, dismissal_event_id: int) -> str | No
 def dispatch_due_demo_abandonments(limit: int = 100) -> int:
     with SessionLocal() as session:
         checks = due_abandonment_checks(session, settings=get_settings(), limit=limit)
+    dispatched = 0
     for session_id, dismissal_event_id in checks:
-        check_demo_abandonment.delay(session_id, dismissal_event_id)
-    return len(checks)
+        try:
+            check_demo_abandonment.delay(session_id, dismissal_event_id)
+            dispatched += 1
+        except Exception:
+            logging.getLogger(__name__).exception("Abandonment dispatch failed; retry on next beat")
+    return dispatched
 
 
 @celery.task(name="leakproof.generate_case_insight")
