@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useSessionProjection } from "@/lib/use-session-projection";
+import { InvoiceStatus } from "@/components/invoice-status";
 import { AbandonmentStatus } from "@/components/abandonment-status";
 import { deliverTelemetry, flushTelemetry } from "@/lib/checkout-telemetry";
 import { useRouter } from "next/navigation";
@@ -30,7 +31,7 @@ type CheckoutState = "idle" | "preparing" | "open" | "failed" | "completed";
 type CheckoutOutcome = "failed" | "completed";
 type VerificationAuthorization = { sessionToken?: string; recoveryToken?: string };
 type PublicCheckout = Pick<
-  DemoSession,
+  Extract<DemoSession, { primary_entity_type: "order" }>,
   | "session_id"
   | "razorpay_key_id"
   | "razorpay_order_id"
@@ -245,7 +246,7 @@ function OrderReceipt({ checkout, recovered }: { checkout: PublicCheckout; recov
 export function DemoCheckout() {
   const router = useRouter();
   const [recipient, setRecipient] = useState("");
-  const [scenario, setScenario] = useState<"CHECKOUT_ABANDON" | "PAYMENT_FAILURE">("CHECKOUT_ABANDON");
+  const [scenario, setScenario] = useState<"CHECKOUT_ABANDON" | "PAYMENT_FAILURE" | "INVOICE_OVERDUE">("CHECKOUT_ABANDON");
   const [session, setSession] = useState<DemoSession>();
   const [state, setState] = useState<CheckoutState>("idle");
   const [message, setMessage] = useState("A fixed ₹500 test order will be created on the server.");
@@ -259,9 +260,9 @@ export function DemoCheckout() {
       const active = JSON.parse(stored) as DemoSession;
       if (new Date(active.expires_at).getTime() > Date.now()) {
         setSession(active);
-        setScenario(active.scenario_type === "CHECKOUT_ABANDON" ? "CHECKOUT_ABANDON" : "PAYMENT_FAILURE");
+        setScenario(active.scenario_type);
         setMessage("Your unexpired test order is ready to resume.");
-        void flushTelemetry(active);
+        if (active.primary_entity_type === "order") void flushTelemetry(active);
       } else {
         sessionStorage.removeItem(SESSION_STORAGE_KEY);
         localStorage.removeItem(`leakproof:checkout-events:${active.session_id}`);
@@ -286,6 +287,7 @@ export function DemoCheckout() {
         sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(active));
         setSession(active);
       }
+      if (active.primary_entity_type === "invoice") { router.replace("/"); return; }
       await Promise.all([loadCheckoutSdk(), flushTelemetry(active)]);
       openCheckout({
         checkout: active,
@@ -308,15 +310,16 @@ export function DemoCheckout() {
     <div className="checkout-card">
       <div className="checkout-card-copy">
         <span className="checkout-step">01 · Test the leak</span>
-        <h2>Open a real Razorpay test Checkout.</h2>
+        <h2>{scenario === "INVOICE_OVERDUE" ? "Recover an overdue test invoice." : "Open a real Razorpay test Checkout."}</h2>
         <p>Dismiss it, trigger a test failure, or complete it. Leakproof records bounded browser signals while server-verified Razorpay sandbox truth decides payment success.</p>
       </div>
       <fieldset className="checkout-scenarios" disabled={Boolean(session) && !expired}>
         <legend>Choose a rehearsal</legend>
         <label><input type="radio" name="scenario" checked={scenario === "CHECKOUT_ABANDON"} onChange={() => setScenario("CHECKOUT_ABANDON")} /> Checkout abandonment</label>
         <label><input type="radio" name="scenario" checked={scenario === "PAYMENT_FAILURE"} onChange={() => setScenario("PAYMENT_FAILURE")} /> Payment failure</label>
+        <label><input type="radio" name="scenario" checked={scenario === "INVOICE_OVERDUE"} onChange={() => setScenario("INVOICE_OVERDUE")} /> Overdue invoice</label>
       </fieldset>
-      <p>{scenario === "CHECKOUT_ABANDON" ? "Open Checkout, close it without paying, then watch the waiting and provider recheck below. Continue recovery once the original order is confirmed unpaid." : "Use a Razorpay test failure, then follow the recovery case. Provider-confirmed failure takes precedence over dismissal."}</p>
+      <p>{scenario === "INVOICE_OVERDUE" ? "Create a test invoice with partial payments enabled. Wait for its business due date, then pay part and the remaining balance on the original hosted invoice." : scenario === "CHECKOUT_ABANDON" ? "Open Checkout, close it without paying, then watch the waiting and provider recheck below. Continue recovery once the original order is confirmed unpaid." : "Use a Razorpay test failure, then follow the recovery case. Provider-confirmed failure takes precedence over dismissal."}</p>
       <label className="checkout-field">
         <span>Recovery email <small>optional</small></span>
         <input
@@ -329,21 +332,27 @@ export function DemoCheckout() {
         />
         <small>Only allowlisted addresses receive mail. Others stay preview-only.</small>
       </label>
-      {session && <OrderReceipt checkout={session} />}
+      {session?.primary_entity_type === "order" && <OrderReceipt checkout={session} />}
       <button className="checkout-primary" type="button" onClick={start} disabled={state === "preparing" || (!expired && (state === "open" || projection?.state === "RECOVERED" || Boolean(projection?.recovery_path)))}>
-        {state === "preparing" ? "Preparing secure Checkout…" : expired ? "Start a new rehearsal" : session ? "Resume Checkout" : scenario === "CHECKOUT_ABANDON" ? "Start checkout abandonment" : "Create test order & open Checkout"}
+        {state === "preparing" ? "Preparing secure Checkout…" : expired ? "Start a new rehearsal" : scenario === "INVOICE_OVERDUE" ? (session ? "View invoice" : "Create test invoice") : session ? "Resume Checkout" : scenario === "CHECKOUT_ABANDON" ? "Start checkout abandonment" : "Create test order & open Checkout"}
         <span aria-hidden="true">→</span>
       </button>
       <CheckoutStatus state={state} message={message} />
       {expired && <p role="status">Session expired. Recovery is disabled; start a new rehearsal.</p>}
       {!expired && projectionError && <p role="status">Status delayed: {projectionError}</p>}
-      {!expired && projection && <AbandonmentStatus check={projection.abandonment_check} />}
+      {!expired && projection && (projection.invoice ? <InvoiceStatus invoice={projection.invoice} /> : <AbandonmentStatus check={projection.abandonment_check} />)}
       {!expired && projection?.recovery_path && <Link className="checkout-primary" href={projection.recovery_path}>Continue recovery →</Link>}
       {session && <Link className="checkout-secondary" href="/">Watch the live dashboard →</Link>}
 
       <p className="checkout-fineprint">Test mode only · Amount and currency are fixed server-side · No automatic charge</p>
     </div>
   );
+}
+
+function invoiceMessage(disposition: string) {
+  if (disposition === "paid") return "This invoice is paid. No further payment is needed.";
+  if (disposition === "merchant_review") return "Payment is unavailable. Contact the merchant to review this invoice.";
+  return "The invoice is payable. Continue on its original hosted page to pay the remaining balance.";
 }
 
 export function RecoveryCheckout({ token }: { token: string }) {
@@ -358,10 +367,11 @@ export function RecoveryCheckout({ token }: { token: string }) {
     loading.current = true;
     setState("preparing");
     try {
-      const [recovery] = await Promise.all([getRecoveryBootstrap(token), loadCheckoutSdk()]);
+      const recovery = await getRecoveryBootstrap(token);
+      if (recovery.purpose === "order_checkout") await loadCheckoutSdk();
       setBootstrap(recovery);
       setState("idle");
-      setMessage("Verified and unpaid. Continue with the exact order that was originally created.");
+      setMessage(recovery.purpose === "invoice_hosted_payment" ? invoiceMessage(recovery.disposition) : "Verified and unpaid. Continue with the exact order that was originally created.");
     } catch (error) {
       setState("failed");
       setMessage(errorMessage(error));
@@ -382,6 +392,12 @@ export function RecoveryCheckout({ token }: { token: string }) {
     try {
       const fresh = await getRecoveryBootstrap(token);
       setBootstrap(fresh);
+      if (fresh.purpose === "invoice_hosted_payment") {
+        setMessage(invoiceMessage(fresh.disposition));
+        setState("idle");
+        if (fresh.disposition === "payable" && fresh.redirect_url) window.location.assign(fresh.redirect_url);
+        return;
+      }
       let active: DemoSession | undefined;
       try {
         const stored = JSON.parse(sessionStorage.getItem(SESSION_STORAGE_KEY) ?? "null") as DemoSession | null;
@@ -409,15 +425,16 @@ export function RecoveryCheckout({ token }: { token: string }) {
   return (
     <div className="checkout-card recovery-card">
       <div className="checkout-card-copy">
-        <span className="checkout-step">Signed recovery · Original order</span>
+        <span className="checkout-step">Signed recovery · Original payment</span>
         <h2>Pick up exactly where you left off.</h2>
-        <p>This link is bound to one session, merchant, order, amount, and currency. We check Razorpay again before Checkout can reopen.</p>
+        <p>We check the current payment state before you continue. Partial invoice payments keep recovery open until the balance is settled.</p>
       </div>
-      {bootstrap && <OrderReceipt checkout={bootstrap} recovered />}
-      <button className="checkout-primary" type="button" onClick={reopen} disabled={!bootstrap || state === "preparing" || state === "open"}>
-        {state === "preparing" ? "Verifying original order…" : "Continue original order"}
+      {bootstrap?.purpose === "order_checkout" && <OrderReceipt checkout={bootstrap} recovered />}
+      {bootstrap?.purpose === "invoice_hosted_payment" && <p>Current outstanding: <strong>{money(bootstrap.amount_due_paise, bootstrap.currency)}</strong></p>}
+      {!(bootstrap?.purpose === "invoice_hosted_payment" && bootstrap.disposition !== "payable") && <button className="checkout-primary" type="button" onClick={reopen} disabled={!bootstrap || state === "preparing" || state === "open" || (bootstrap.purpose === "invoice_hosted_payment" && bootstrap.disposition !== "payable")}>
+        {state === "preparing" ? "Verifying payment state…" : bootstrap?.purpose === "invoice_hosted_payment" ? "Continue original invoice" : "Continue original order"}
         <span aria-hidden="true">→</span>
-      </button>
+      </button>}
       {state === "failed" && !bootstrap && (
         <button className="checkout-secondary" type="button" onClick={prepare}>Check the link again</button>
       )}

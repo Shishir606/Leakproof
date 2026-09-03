@@ -19,7 +19,7 @@ export function Shell({ children, active }: { children: ReactNode; active: "live
         <Logo />
         <nav aria-label="Primary navigation">
           <Link className={active === "live" ? "nav-item active" : "nav-item"} href="/">
-            <GridIcon /> <span>Live Demo · verified</span>
+            <GridIcon /> <span>Live Demo</span>
           </Link>
           {operatorNavigationEnabled && (
             <Link className={active === "cases" ? "nav-item active" : "nav-item"} href="/cases">

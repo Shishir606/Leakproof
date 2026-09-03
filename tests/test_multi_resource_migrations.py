@@ -316,3 +316,79 @@ def test_track_a_concurrent_dismissal_and_scheduled_redispatch(migrated_postgres
             )
             == 1
         )
+
+
+def test_track_b_concurrent_reconciliation_and_email_share_one_invoice(migrated_postgres):
+    from datetime import timedelta
+
+    from test_api_september_4 import NOW
+    from test_track_b_invoices import pay, reconcile, setup_invoice
+
+    from leakproof.demo.email import execute_demo_recovery_email, schedule_demo_recovery_email
+    from leakproof.diagnosis import diagnose_case
+    from leakproof.providers.fakes import FakeEmailProvider, FakePaymentProvider
+
+    engine, _ = migrated_postgres
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    provider, email = FakePaymentProvider(), FakeEmailProvider()
+    with factory() as session:
+        _, demo, config = setup_invoice(session, provider, recipient="reviewer@example.com")
+        case = reconcile(session, demo, provider, config)
+        diagnose_case(session, case.id)
+        action = schedule_demo_recovery_email(
+            session, case.id, settings=config, now=NOW + timedelta(seconds=61)
+        )
+        demo_id, case_id, action_id = demo.id, case.id, action.id
+        pay(provider, demo, 20000)
+
+    def check():
+        from leakproof.models.db import DemoSession
+
+        with factory() as session:
+            demo = session.get(DemoSession, demo_id)
+            return reconcile(session, demo, provider, config, 120).id
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        assert set(pool.map(lambda _: check(), range(4))) == {case_id}
+    with factory() as session:
+        obligation = session.scalar(
+            select(ProviderObligation).where(ProviderObligation.case_id == case_id)
+        )
+        assert obligation.outstanding_paise == 30000
+        assert obligation.recovered_paise == 20000
+        assert obligation.detected_due_paise == 50000
+        assert (
+            session.scalar(
+                select(func.count(Settlement.id)).where(Settlement.obligation_id == obligation.id)
+            )
+            == 1
+        )
+        pay(provider, demo, 50000, payment_id="pay_final", amount=30000, seconds=100)
+
+    def contact():
+        with factory() as session:
+            return execute_demo_recovery_email(
+                session,
+                action_id,
+                provider=email,
+                invoice_provider=provider,
+                settings=config,
+                now=NOW + timedelta(seconds=120),
+            ).status
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futures = [pool.submit(check), pool.submit(contact), pool.submit(check)]
+        assert [f.result(timeout=10) for f in futures] == [case_id, "cancelled", case_id]
+    with factory() as session:
+        obligation = session.scalar(
+            select(ProviderObligation).where(ProviderObligation.case_id == case_id)
+        )
+        assert obligation.recovered_paise == 50000 and obligation.outstanding_paise == 0
+        assert session.get(RecoveryCase, case_id).outcome == "RECOVERED"
+        assert (
+            session.scalar(
+                select(func.count(Settlement.id)).where(Settlement.obligation_id == obligation.id)
+            )
+            == 2
+        )
+        assert not email.calls

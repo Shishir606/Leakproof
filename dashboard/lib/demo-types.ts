@@ -1,4 +1,4 @@
-import type { DataProvenance, LeakType, SetupState, OrderRecoveryBootstrap } from "./resource-types";
+import type { DataProvenance, LeakType, SetupState, ResourceSessionCreated, ResourceRecoveryBootstrap } from "./resource-types";
 
 export type CheckoutEventType =
   | "checkout_opened"
@@ -6,21 +6,23 @@ export type CheckoutEventType =
   | "checkout_dismissed"
   | "checkout_completed";
 
-export type DemoSession = {
-  scenario_type: LeakType;
-  primary_entity_type: "order";
-  setup_state: SetupState;
-  session_id: string;
-  session_token: string;
-  razorpay_key_id: string;
-  razorpay_order_id: string;
-  amount_paise: number;
-  currency: string;
-  expires_at: string;
-  email_mode: "allowlisted" | "preview_only";
-};
+export type DemoSession = Exclude<ResourceSessionCreated, { primary_entity_type: "subscription" }>;
+export type RecoveryBootstrap = Exclude<ResourceRecoveryBootstrap, { purpose: "subscription_method_update" }>;
 
-export type RecoveryBootstrap = OrderRecoveryBootstrap;
+export type InvoiceProjection = {
+  provider_status: string;
+  business_due_at: string;
+  business_overdue: boolean;
+  aging_bucket: string;
+  provider_expires_at: string | null;
+  detected_balance_paise: number | null;
+  outstanding_balance_paise: number;
+  amount_paid_paise: number;
+  recovered_paise: number;
+  disposition: "payable" | "merchant_review" | "paid" | "provider_retry";
+  last_checked_at: string | null;
+  partial_payment: boolean;
+};
 
 export type DemoSessionState =
   | "CREATED"
@@ -85,6 +87,7 @@ export type AbandonmentCheck = {
 };
 
 export type DemoSessionProjection = {
+  invoice: InvoiceProjection | null;
   abandonment_check: AbandonmentCheck;
   scenario_type: LeakType;
   primary_entity_type: "order" | "invoice" | "subscription";

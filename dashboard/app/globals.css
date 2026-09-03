@@ -591,3 +591,12 @@ button, select, input { font: inherit; }
 .checkout-scenarios label { display: flex; gap: 6px; align-items: center; font-size: 14px; }
 .abandonment-status { border: 1px solid #b6cfc5; border-radius: 12px; background: #eff8f4; color: #254c3e; padding: 18px; margin: 18px 0; }
 .abandonment-status p { font-size: 14px; line-height: 1.55; margin: 6px 0 0; }
+
+.invoice-status { display: grid; gap: 12px; margin: 20px 0; }
+.invoice-status > div { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.invoice-status strong { overflow-wrap: anywhere; }
+.invoice-status p { line-height: 1.6; }
+/* Keep the recovery action visible in the narrow desktop action column. */
+.live-action .continue-recovery { grid-column: 2 / -1; justify-self: start; }
+.invoice-status > p { grid-column: 1 / -1; }
+.invoice-status strong { white-space: normal; }

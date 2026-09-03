@@ -227,15 +227,37 @@ class OperationalMetrics(StrictContract):
 
 class AbandonmentCheck(StrictContract):
     status: Literal[
-        "idle", "waiting", "provider_recheck", "provider_retry", "provider_pending",
-        "confirmed", "payment_failure", "recovered",
+        "idle",
+        "waiting",
+        "provider_recheck",
+        "provider_retry",
+        "provider_pending",
+        "confirmed",
+        "payment_failure",
+        "recovered",
     ] = "idle"
     due_at: datetime | None = None
     browser_dismissed_at: datetime | None = None
     unpaid_confirmed: bool = False
 
 
+class InvoiceProjection(StrictContract):
+    provider_status: str
+    business_due_at: datetime
+    business_overdue: bool
+    aging_bucket: Literal["not_due", "under_1_day", "1_to_7_days", "over_7_days"]
+    provider_expires_at: datetime | None
+    detected_balance_paise: int | None
+    outstanding_balance_paise: int = Field(ge=0)
+    amount_paid_paise: int = Field(ge=0)
+    recovered_paise: int = Field(ge=0)
+    disposition: Literal["payable", "merchant_review", "paid", "provider_retry"]
+    last_checked_at: datetime | None
+    partial_payment: bool
+
+
 class DemoSessionProjection(StrictContract):
+    invoice: InvoiceProjection | None = None
     abandonment_check: AbandonmentCheck = Field(default_factory=AbandonmentCheck)
     scenario_type: LeakType = LeakType.PAYMENT_FAILURE
     primary_entity_type: Literal["order", "invoice", "subscription"] = "order"
@@ -269,7 +291,7 @@ class AcceptanceSessionSummary(StrictContract):
 
 
 class AcceptanceCaseSummary(StrictContract):
-    leak_type: Literal["PAYMENT_FAILURE", "CHECKOUT_ABANDON"]
+    leak_type: Literal["PAYMENT_FAILURE", "CHECKOUT_ABANDON", "INVOICE_OVERDUE"]
     state: str
     deterministic_diagnosis_ready: bool
     insight_status: Literal["pending", "succeeded", "fallback"]
@@ -294,6 +316,7 @@ class AcceptanceCheck(StrictContract):
 class DemoAcceptanceExport(StrictContract):
     """Sanitized, credential-free evidence captured during the release rehearsal."""
 
+    invoice: InvoiceProjection | None = None
     schema_version: Literal["2026-09-04"] = "2026-09-04"
     data_provenance: DataProvenance
     exported_at: datetime
@@ -351,7 +374,10 @@ class ResendWebhookEnvelope(BaseModel):
 class InvoiceRecoveryBootstrap(StrictContract):
     purpose: Literal["invoice_hosted_payment"] = "invoice_hosted_payment"
     session_id: str
-    redirect_url: str = Field(pattern=r"^https://")
+    disposition: Literal["payable", "merchant_review", "paid"] = "payable"
+    redirect_url: str | None = Field(default=None, pattern=r"^https://")
+    amount_due_paise: int = Field(default=0, ge=0)
+    currency: str = "INR"
     expires_at: datetime
 
 
@@ -396,9 +422,9 @@ SCENARIO_CAPABILITIES = (
     ScenarioCapability(
         scenario_type=LeakType.INVOICE_OVERDUE,
         primary_entity_type="invoice",
-        enabled=False,
-        capability_evidence=DataProvenance.ARCHITECTURE_READY,
-        reason="Invoice provider lifecycle and recovery are not implemented.",
+        enabled=True,
+        capability_evidence=DataProvenance.CONTRACT_VERIFIED,
+        reason="Requires a configured test customer and human hosted partial/full payment.",
     ),
     ScenarioCapability(
         scenario_type=LeakType.SUBSCRIPTION_HALT,

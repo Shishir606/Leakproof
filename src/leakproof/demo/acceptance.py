@@ -44,6 +44,8 @@ def build_demo_acceptance_export(
     )
     case = projection.case
     demo = session.get(DemoSession, session_id)
+    if demo.primary_entity_type == "invoice":
+        return _invoice_acceptance(session, demo, projection, exported_at)
     case_row = session.get(RecoveryCase, case.case_id) if case is not None else None
     recovery_action_registered = any(
         action.action_type == "recovery_link" for action in projection.recovery_actions
@@ -316,5 +318,154 @@ def build_demo_acceptance_export(
             for item in projection.provider_statuses
         ],
         timeline=timeline,
+        checks=checks,
+    )
+
+
+def _invoice_acceptance(session, demo, projection, exported_at):
+    from leakproof.models.db import Event, ProviderObligation, Settlement
+
+    obligation = session.scalar(
+        select(ProviderObligation).where(
+            ProviderObligation.merchant_id == demo.merchant_id,
+            ProviderObligation.provider_entity_id == demo.primary_entity_id,
+            ProviderObligation.mode == "test",
+        )
+    )
+    case = projection.case
+    events = list(
+        session.scalars(
+            select(Event).where(Event.case_id == (case.case_id if case else "__none__"))
+        )
+    )
+    settlements = list(
+        session.scalars(select(Settlement).where(Settlement.obligation_id == obligation.id))
+    )
+    latest = {p.operation: p for p in projection.provider_statuses if p.provider == "razorpay"}
+    invoice = projection.invoice
+    review = bool(invoice and invoice.disposition == "merchant_review")
+    partial = any(
+        e.kind == "INVOICE_RECONCILED"
+        and e.payload.get("provider_status") == "partially_paid"
+        and e.payload.get("amount_due_paise", 0) > 0
+        and e.payload.get("case_open") is True
+        for e in events
+    )
+    checks = []
+
+    def check(name, passed, detail, severity="blocking"):
+        checks.append(
+            AcceptanceCheck(check=name, passed=bool(passed), severity=severity, detail=detail)
+        )
+
+    check("case_detected", case, "One provider-correlated invoice case was detected.")
+    check(
+        "original_invoice_reused",
+        case and obligation.case_id == case.case_id,
+        "The case remains attached to its original invoice obligation.",
+    )
+    check(
+        "invoice_due_policy_recorded",
+        invoice and invoice.business_due_at,
+        "Application business due date is recorded separately from provider expiry.",
+    )
+    check(
+        "invoice_payment_ledger_unique",
+        len({p.payment_id for p in settlements}) == len(settlements),
+        "Each captured payment appears once in the merchant-scoped ledger.",
+    )
+    check(
+        "audit_projection_replay_matches",
+        case and replay_case(session, case.case_id).projection_matches,
+        "Append-only audit replay matches the case projection.",
+    )
+    check(
+        "no_blocking_provider_failure",
+        latest and all(p.status != "failed" for p in latest.values()),
+        "Latest provider setup and reconciliation calls succeeded.",
+    )
+    if review:
+        check(
+            "nonpayable_invoice_has_no_payment_cta",
+            not projection.recovery_url_available,
+            "Non-payable invoice is routed to merchant review without a payment CTA.",
+        )
+        check(
+            "nonpayable_invoice_not_recovered",
+            projection.state != "RECOVERED",
+            "Expiry or cancellation does not establish payment.",
+        )
+    else:
+        check(
+            "invoice_partial_payment_kept_open",
+            partial,
+            "A reconciled partial payment retained the original open case.",
+        )
+        check(
+            "original_invoice_opened",
+            "recovery_invoice_check" in latest,
+            "The bound recovery route rechecked the original hosted invoice.",
+        )
+        check(
+            "same_case_closed",
+            case and case.state == "CLOSED" and projection.state == "RECOVERED",
+            "Verified full invoice settlement closed the detected case.",
+        )
+        check(
+            "session_recovered_amount_correct",
+            invoice
+            and invoice.outstanding_balance_paise == 0
+            and obligation.recovered_paise == obligation.detected_due_paise
+            and sum(p.credited_paise for p in settlements) == obligation.detected_due_paise,
+            "Incremental credit equals the original detected unpaid balance.",
+        )
+        check(
+            "provider_verified_payment",
+            invoice
+            and invoice.provider_status == "paid"
+            and sum(p.amount_paise for p in settlements) == demo.amount_paise,
+            "Invoice paid state is backed by unique captured payment identities.",
+        )
+    check(
+        "pending_contacts_cancelled",
+        not any(
+            a.status == "pending"
+            for a in projection.recovery_actions
+            if a.action_type == "email_link"
+        ),
+        "No pending customer contact remains after settlement or merchant review.",
+    )
+    check(
+        "optional_email_exercised",
+        any(a.action_type == "email_link" for a in projection.recovery_actions),
+        "Optional allowlisted email or preview was scheduled.",
+        "advisory",
+    )
+    return DemoAcceptanceExport(
+        data_provenance=projection.data_provenance,
+        exported_at=exported_at,
+        passed=all(c.passed for c in checks if c.severity == "blocking"),
+        invoice=invoice,
+        session=AcceptanceSessionSummary(
+            scenario_type=demo.scenario_type,
+            state=projection.state,
+            amount_paise=demo.amount_paise,
+            currency=demo.currency,
+            email_mode=projection.email_mode,
+        ),
+        case=AcceptanceCaseSummary(
+            leak_type=case.leak_type,
+            state=case.state,
+            deterministic_diagnosis_ready=case.deterministic_diagnosis is not None,
+            insight_status=case.insight_status,
+        )
+        if case
+        else None,
+        operational_metrics=projection.metrics,
+        provider_statuses=[
+            AcceptanceProviderStatus(**p.model_dump(exclude={"request_id"}))
+            for p in projection.provider_statuses
+        ],
+        timeline=projection.timeline,
         checks=checks,
     )

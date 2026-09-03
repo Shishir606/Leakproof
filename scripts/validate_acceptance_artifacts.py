@@ -40,6 +40,11 @@ FORBIDDEN_KEY_FRAGMENTS = {
     "attempt_id",
     "browser_attempt",
     "order_id",
+    "invoice_id",
+    "payment_id",
+    "customer_id",
+    "short_url",
+    "redirect_url",
     "provider_ref",
     "recipient",
     "recovery_path",
@@ -52,7 +57,9 @@ FORBIDDEN_VALUE_PATTERNS = {
     "email address": re.compile(r"\b[^\s@]+@[^\s@]+\.[^\s@]+\b"),
     "bearer credential": re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+"),
     "signed recovery URL": re.compile(r"(?i)(?:https?://\S+)?/recover/[A-Za-z0-9_.-]+"),
-    "Razorpay entity identifier": re.compile(r"\b(?:order|pay|evt)_[A-Za-z0-9_-]+\b"),
+    "Razorpay entity identifier": re.compile(
+        r"\b(?:order|pay|evt|inv|sub|cust|token)_[A-Za-z0-9_-]+\b"
+    ),
     "session credential": re.compile(r"\bdemo_[0-9a-f]{16,}\b"),
 }
 
@@ -92,6 +99,31 @@ def validate_file(path: Path, *, require_live: bool) -> DemoAcceptanceExport:
 
     checks = {item.check: item for item in artifact.checks}
     required = REQUIRED_CHECKS.copy()
+    if artifact.session.scenario_type == "INVOICE_OVERDUE":
+        required = {
+            "case_detected",
+            "original_invoice_reused",
+            "invoice_due_policy_recorded",
+            "invoice_payment_ledger_unique",
+            "audit_projection_replay_matches",
+            "no_blocking_provider_failure",
+            "pending_contacts_cancelled",
+        }
+        if artifact.invoice and artifact.invoice.disposition == "merchant_review":
+            required |= {
+                "nonpayable_invoice_has_no_payment_cta",
+                "nonpayable_invoice_not_recovered",
+            }
+        else:
+            required |= {
+                "invoice_partial_payment_kept_open",
+                "original_invoice_opened",
+                "same_case_closed",
+                "session_recovered_amount_correct",
+                "provider_verified_payment",
+            }
+        if artifact.case is None or artifact.case.leak_type != "INVOICE_OVERDUE":
+            errors.append("invoice evidence requires an invoice-overdue case")
     if artifact.data_provenance == DataProvenance.LIVE_TELEMETRY_PROVIDER_RECONCILED:
         required |= ABANDONMENT_CHECKS
         if artifact.case is None or artifact.case.leak_type != "CHECKOUT_ABANDON":

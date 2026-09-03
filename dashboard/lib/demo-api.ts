@@ -119,7 +119,7 @@ export async function downloadAcceptance(session: DemoSession): Promise<boolean>
   const url = URL.createObjectURL(new Blob([JSON.stringify(artifact, null, 2) + "\n"], { type: "application/json" }));
   const link = document.createElement("a");
   link.href = url;
-  link.download = `checkout-acceptance-${new Date().toISOString().replaceAll(":", "-")}.json`;
+  link.download = `${session.primary_entity_type}-acceptance-${new Date().toISOString().replaceAll(":", "-")}.json`;
   link.click();
   URL.revokeObjectURL(url);
   return artifact.passed;

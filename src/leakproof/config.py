@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     demo_email_allowlist: str = ""
     demo_amount_paise: int = Field(default=50_000, ge=100)
     demo_currency: Literal["INR"] = "INR"
+    demo_invoice_customer_id: str = Field(default="", pattern=r"^(cust_[A-Za-z0-9_]+)?$")
+    demo_invoice_due_seconds: int = Field(default=60, ge=1, le=86400)
+    demo_invoice_expiry_minutes: int = Field(default=60, ge=16, le=1440)
+    invoice_reconcile_seconds: int = Field(default=30, ge=5, le=300)
     demo_session_ttl_minutes: int = Field(default=30, ge=5, le=120)
     demo_sessions_per_ip_hour: int = Field(default=10, ge=1, le=100)
     demo_checkout_events_per_session: int = Field(default=100, ge=4, le=1_000)

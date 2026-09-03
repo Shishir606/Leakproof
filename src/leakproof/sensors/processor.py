@@ -176,7 +176,9 @@ def _record_payment_attempt(session: Session, event: WebhookEvent) -> None:
     existing.observed_at = min(existing_time, attempt.observed_at)
 
 
-def process_stored_webhook(session: Session, webhook_id: int) -> str | None:
+def process_stored_webhook(
+    session: Session, webhook_id: int, *, provider=None, settings=None, now: datetime | None = None
+) -> str | None:
     event = session.scalar(
         select(WebhookEvent).where(WebhookEvent.id == webhook_id).with_for_update()
     )
@@ -189,6 +191,22 @@ def process_stored_webhook(session: Session, webhook_id: int) -> str | None:
 
     event.processing_attempts += 1
     try:
+        from leakproof.config import get_settings
+        from leakproof.demo.invoices import process_invoice_webhook
+        from leakproof.providers.factory import get_payment_provider
+
+        handled, invoice_case_id = process_invoice_webhook(
+            session,
+            event,
+            provider=provider or get_payment_provider(),
+            settings=settings or get_settings(),
+            now=now,
+        )
+        if handled:
+            event.processed_at = datetime.now(UTC)
+            event.last_error = None
+            session.commit()
+            return invoice_case_id
         _record_payment_attempt(session, event)
         state_signal = normalize_razorpay_state(event.merchant_id, event.payload)
         if state_signal:

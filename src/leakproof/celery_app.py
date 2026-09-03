@@ -4,7 +4,6 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 from celery import Celery
-from celery.schedules import crontab
 from sqlalchemy import select
 
 from leakproof.actuators import due_action_ids, execute_action
@@ -80,9 +79,9 @@ celery.conf.update(
             "task": "leakproof.reconcile_provider_events",
             "schedule": 3600.0,
         },
-        "invoice-aging-daily": {
+        "invoice-aging": {
             "task": "leakproof.poll_invoice_aging",
-            "schedule": crontab(hour=7, minute=0),
+            "schedule": float(settings.invoice_reconcile_seconds),
         },
     },
 )
@@ -115,7 +114,21 @@ def _prepare_case_insight(session, case_id: str) -> bool:
     if demo is None:
         return False
     diagnose_case(session, case.id)
+    if demo.primary_entity_type == "invoice":
+        from leakproof.demo.invoices import invoice_view
+
+        view = invoice_view(session, demo, datetime.now(UTC))
+        if (
+            not view
+            or view["disposition"] != "payable"
+            or case.outcome == "RECOVERED"
+            or case.arm == "HOLDOUT"
+        ):
+            session.commit()
+            return False
     schedule_demo_recovery_email(session, case.id, settings=get_settings())
+    if demo.primary_entity_type == "invoice":
+        return False
     mark_case_insight_pending(session, case.id)
     session.commit()
     return True

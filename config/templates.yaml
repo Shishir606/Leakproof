@@ -129,3 +129,12 @@
   languages: [hinglish]
   content:
     hinglish: "Main is request ko support team ke liye note kar raha hoon. Call yahin band karte hain."
+
+- id: util_invoice_recovery_email_v1
+  channel: email
+  dlt_or_meta_ref: "internal:invoice-recovery-email-v1"
+  variables: [customer_ref, amount, link]
+  tone: soft
+  languages: [en-IN]
+  content:
+    en-IN: "Hi {customer_ref}, your invoice has an outstanding balance of {amount}. Review the current balance and continue on the original invoice payment page: {link}. Any partial payment will reduce the balance. If payment is unavailable, please contact the merchant."

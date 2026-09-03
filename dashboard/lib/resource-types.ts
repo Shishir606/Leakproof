@@ -57,7 +57,10 @@ export type OrderRecoveryBootstrap = {
 export type ResourceRecoveryBootstrap = OrderRecoveryBootstrap | {
   purpose: "invoice_hosted_payment";
   session_id: string;
-  redirect_url: string;
+  redirect_url: string | null;
+  disposition: "payable" | "merchant_review" | "paid";
+  amount_due_paise: number;
+  currency: string;
   expires_at: string;
 } | {
   purpose: "subscription_method_update";

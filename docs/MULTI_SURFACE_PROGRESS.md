@@ -564,3 +564,116 @@ all blocking checks, and update this provider status only after the actual rehea
 Historical acceptance artifacts, the original running database, unrelated multi-resource work,
 and committed audit samples were preserved. No commit, push, public deployment, real payment or
 outbound message was performed for this implementation.
+
+## 2026-09-03 — Track B overdue invoice recovery
+
+**Implementation: COMPLETE. Automated gates: PASS. Provider acceptance: PENDING.**
+This entry supersedes the earlier invoice “simulation only” / “remaining vertical slice” status.
+No real invoice was created, issued, paid, expired or cancelled during this implementation, and
+no recipient email was sent. Current account setup and human payment evidence remain open.
+
+### Inspected and reused
+
+Reused the completed typed `InvoiceProvider` create/issue/fetch/list adapter and bounded Razorpay
+transport; merchant/provider/mode identities; canonical invoice obligation and order attachment;
+unique captured-payment ledger and capped incremental attribution; original detected/current
+outstanding fields; append-only audit and replay; the signed inbox and worker retry; v2 token
+claims/purposes and existing order-token compatibility; session rate limiting and encryption;
+allowlisted email, quotas, idempotency and contact gates; authenticated projection/export and
+Next.js proxies; and the existing Checkout/Live Demo components.
+
+Extended the existing API contract/scenario tests, PostgreSQL migration fixture and concurrency
+suite, acceptance validator/capture CLI, and TypeScript exhaustiveness check. The new invoice
+browser check reuses Track A's explicit simulated-evidence watermark and Playwright dependency.
+Completed Track A behavior and historical provider artifacts were retained. No new migration,
+provider transport, generic workflow engine, recurring-method recovery, or replacement-resource
+API was needed.
+
+### Missing functionality completed
+
+- Enabled invoice sessions using one non-GST test draft/issue sequence, notification controls and
+  partial-payment support. Added typed expiry/issue/customer fields and strict numeric decoding.
+  Setup persists the original draft before issuing it; ambiguous issue failure leaves an actionable
+  session for read-only reconciliation and merchant inspection, without automatic reissue.
+- Persisted an explicit application due policy independently of provider expiry. The existing Beat
+  sensor now reconciles registered invoices at a configurable interval, isolates failed reads, and
+  shares its logic with invoice/payment/order/subscription webhook wakeups and recovery clicks.
+  Event payload ordering cannot override the current merchant-scoped invoice/payment read.
+- Payable issued/partially-paid invoices expose only an exact approved Razorpay invoice URL after
+  a fresh check. Expired, cancelled, deleted or draft resources show merchant review. Elapsed
+  provider expiry removes the CTA even before its event arrives. Unknown, inconsistent, wrong-scope
+  or unavailable provider responses hold recovery; a URL or zero due amount alone never proves payment.
+- Preserved the original detected balance, baseline paid amount and current outstanding separately.
+  All pre-detection captures are registered without recovery credit. Later verified captures receive
+  incremental credit once across overlapping event surfaces; payment creation may precede actual
+  capture. Partial settlement retains the case; fully paid invoice plus matching captured-payment
+  totals closes it and cancels pending email. Replayed captures no longer append duplicate settlement
+  audit observations. Invoice settlement and email share the same namespace/action lock order.
+- Added invoice-specific optional email wording using current outstanding and the bound recovery
+  route. Non-payable invoices and expired sessions cancel contact; transient provider errors leave
+  email pending for retry. Existing allowlist and preview behavior are reused.
+- Added scenario selection, invoice setup status, business aging, provider expiry, original detected
+  balance, current outstanding, partial-payment guidance, merchant review and safe hosted navigation.
+  Invoice flows do not load Checkout or send order telemetry. The same dashboard downloads sanitized
+  invoice settlement or non-payable acceptance exports. Generic order insight generation is skipped
+  for invoice sessions; eligibility is explained by deterministic invoice state.
+
+### Verification
+
+Evidence: [`artifacts/track-b/`](../artifacts/track-b/).
+
+| Gate | Result |
+|---|---|
+| `make track-b-contract` | **122 passed**; five sanitized exports validated: three invoice outcomes plus the two reused order/abandonment paths. |
+| Full Python suite / coverage | **335 passed, 10 PostgreSQL-only tests skipped; 89.09% coverage**, above the 85% gate. |
+| New targeted PostgreSQL concurrency | **2 passed** on fresh and frozen-upgrade disposable databases; concurrent partial/final reconciliations maintain one owner and unique payment credit, and competing email is cancelled after full payment. Eight unrelated existing PostgreSQL cases were not rerun. |
+| Browser | **9 groups passed, zero page errors**: selection/setup without SDK, refresh, partial balances, stale link recheck, original hosted navigation, expiry/cancellation/outage holds, mobile layout, invalid/expired tokens, full settlement and export. All provider traffic intercepted; no provider payment. |
+| Existing Track A browser regression | **9 groups passed, zero page errors**, using the shared components after invoice support. Historical provider exports also still validate. |
+| TypeScript / production build | **PASS** with resource-discriminated session and bootstrap types. |
+| Ruff / whitespace | **PASS**. |
+
+Contract coverage includes partial-before-detection baselines, payment creation before later capture,
+overlapping invoice/payment/order/subscription notifications, inbox duplicates, bare order/payment
+relationship lookup, paid-first and late expired events, contradictory current snapshots, missing
+payment identities, quarantined/conflicting ownership, wrong merchant/customer/order/currency, provider setup/read failures, expired
+and tampered tokens, all token bindings, optional allowlisted email and non-allowlisted previews.
+Existing foundation tests continue to cover token purpose rejection at Checkout verification.
+
+The desktop partial-balance and mobile merchant-review screenshots were visually reviewed. A narrow
+recovery-action column was corrected so the continuation button remains fully visible. All browser
+captures are explicitly watermarked as simulated provider responses. Simulated acceptance exports
+remain `SIMULATED_END_TO_END`; account verification has not been inferred from them.
+
+### Remaining provider/manual work
+
+- The local Test Mode customer is configured and Razorpay invoice create/issue entitlement is now
+  verified. Live responses exposed two provider contract variants: draft balance fields are null
+  until issue, and current hosted invoice links use the exact `https://rzp.io/rzp/...` form. The
+  adapter now normalizes only draft null balances, and the redirect allowlist accepts both Razorpay's
+  documented `/i/...` and observed `/rzp/...` forms. The focused suite passes 41 tests and a fresh
+  provider-backed session returned `READY` with an issued ₹500 invoice and a safe hosted URL.
+- A provider-backed full-payment rehearsal on 2026-09-04 detected the ₹500 overdue balance, reused
+  the original invoice, verified one captured ₹500 payment, reduced outstanding to zero and closed
+  the same case with ₹500 recovered. The sanitized
+  `artifacts/api-acceptance/invoice-full-settlement-2026-09-04.json` export is marked
+  `LIVE_PROVIDER_VERIFIED`; all blocking checks pass except `invoice_partial_payment_kept_open`
+  because this invoice was paid in full in one step.
+- A provider-backed checkout-abandonment rehearsal on 2026-09-04 recorded browser dismissal,
+  confirmed the original ₹500 order remained unpaid, reused that order for recovery, verified one
+  captured ₹500 payment and closed the same case. The sanitized
+  `artifacts/api-acceptance/checkout-abandonment-2026-09-04.json` export passes every blocking check
+  with `LIVE_TELEMETRY_PROVIDER_RECONCILED` provenance.
+- The API, worker and Beat are rebuilt and running locally. Ensure the public HTTPS webhook includes
+  the three invoice events and verify signed delivery through its inbox/worker.
+- Perform a **human partial payment and remaining-balance payment on a new hosted invoice**. Capture
+  the acceptance export only after the partial/open checkpoint has been observed and the remaining
+  balance subsequently reaches zero.
+- Use another unpaid invoice for real expiry or manual cancellation and capture the merchant-review
+  outcome. Set session lifetime longer than invoice expiry for that rehearsal; provider expiry
+  requires actual elapsed time and is at least 15 minutes in the future.
+- Optionally verify actual allowlisted email delivery. No recipient was contacted by these checks.
+
+Exact setup, payment and capture steps are in the
+[Track B runbook](API_RELEASE_RUNBOOK.md#track-b--invoice-recovery-acceptance).
+Test Mode provider writes created the dedicated customer plus draft/issued rehearsal invoices. No
+commit, push, public deployment, manual payment or recipient email was performed.

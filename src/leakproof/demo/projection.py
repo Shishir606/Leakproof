@@ -121,6 +121,12 @@ def _safe_event_payload(event: Event) -> dict:
             if key in payload
         }
     allowed = {
+        "case_open",
+        "provider_status",
+        "business_overdue",
+        "amount_due_paise",
+        "amount_paid_paise",
+        "disposition",
         "amount_at_risk",
         "currency",
         "from_leak_type",
@@ -174,8 +180,10 @@ def get_demo_session_projection(
     if _utc(demo.expires_at) <= now and DemoSessionState(demo.state) != DemoSessionState.RECOVERED:
         raise DemoSessionExpired("demo session has expired")
 
+    from leakproof.demo.invoices import invoice_view
     from leakproof.provider_resources import case_for_session, order_recovery_supported
 
+    invoice = invoice_view(session, demo, now)
     case = case_for_session(session, demo)
     diagnosis = session.get(Diagnosis, case.id) if case else None
     insight_record = session.get(CaseInsightRecord, case.id) if case else None
@@ -318,7 +326,12 @@ def get_demo_session_projection(
         else []
     )
     recovery_url_available = (
-        order_recovery_supported(session, demo) and case is not None
+        (
+            order_recovery_supported(session, demo)
+            or invoice is not None
+            and invoice["disposition"] == "payable"
+        )
+        and case is not None
     ) and DemoSessionState(demo.state) in {
         DemoSessionState.AT_RISK,
         DemoSessionState.CHECKOUT_OPEN,
@@ -338,7 +351,13 @@ def get_demo_session_projection(
     if case is not None:
         recovery_actions.append(
             RecoveryActionProjection(
-                action_type="recovery_link",
+                action_type=(
+                    "merchant_review"
+                    if invoice and invoice["disposition"] == "merchant_review"
+                    else "invoice_payment_link"
+                    if invoice
+                    else "recovery_link"
+                ),
                 status=(
                     "available"
                     if recovery_url_available
@@ -494,6 +513,7 @@ def get_demo_session_projection(
     ):
         provenance = DataProvenance.LIVE_TELEMETRY_PROVIDER_RECONCILED
     return DemoSessionProjection(
+        invoice=invoice,
         abandonment_check=abandonment,
         scenario_type=demo.scenario_type,
         primary_entity_type=demo.primary_entity_type,

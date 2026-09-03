@@ -184,3 +184,14 @@ track-a-contract:
 
 track-a-browser:
 	uv run python scripts/check_track_a_browser.py --base-url $(TRACK_A_BROWSER_URL) --output-dir $(TRACK_A_ARTIFACT_DIR)/browser
+
+.PHONY: track-b-contract track-b-browser
+TRACK_B_ARTIFACT_DIR ?= artifacts/track-b
+TRACK_B_BROWSER_URL ?= http://127.0.0.1:3101
+
+track-b-contract:
+	uv run pytest tests/test_track_b_invoices.py tests/test_multi_resource_foundation.py tests/test_api_contracts.py tests/test_api_september_4.py tests/test_acceptance_artifacts.py --acceptance-output-dir $(TRACK_B_ARTIFACT_DIR)/contract
+	uv run python scripts/validate_acceptance_artifacts.py --directory $(TRACK_B_ARTIFACT_DIR)/contract
+
+track-b-browser:
+	uv run python scripts/check_track_b_browser.py --base-url $(TRACK_B_BROWSER_URL) --output-dir $(TRACK_B_ARTIFACT_DIR)/browser

@@ -140,7 +140,7 @@ class RazorpayPaymentProvider:
     @staticmethod
     def _required(payload: dict[str, Any], key: str, expected: type) -> Any:
         value = payload.get(key)
-        if not isinstance(value, expected):
+        if not isinstance(value, expected) or (expected is int and isinstance(value, bool)):
             raise ProviderError(
                 provider="razorpay",
                 operation="decode_response",
@@ -217,23 +217,39 @@ class RazorpayPaymentProvider:
             status=self._required(payload, "status", str),
             method=payload.get("method") if isinstance(payload.get("method"), str) else None,
             request_id=request_id,
+            created_at=payload.get("created_at"),
+            invoice_id=payload.get("invoice_id"),
         )
 
     def _decode_invoice(self, payload: Any, request_id: str | None = None) -> Invoice:
         if not isinstance(payload, dict):
             raise self._decode_error("invoice", request_id)
         try:
+            amount = self._required(payload, "amount", int)
+            status = self._required(payload, "status", str)
+            # Razorpay leaves both balance fields null until a draft is issued.
+            # The draft still has a verified total, so its only valid balance is
+            # zero paid and the full amount outstanding. Other states remain
+            # strict because inferring their balance could falsely close a case.
+            amount_paid = payload.get("amount_paid")
+            amount_due = payload.get("amount_due")
+            if status == "draft" and amount_paid is None and amount_due is None:
+                amount_paid, amount_due = 0, amount
             return Invoice(
                 request_id=payload.get("__request_id") or request_id,
                 id=self._required(payload, "id", str),
                 order_id=payload.get("order_id"),
                 subscription_id=payload.get("subscription_id"),
-                status=self._required(payload, "status", str),
-                amount_paise=self._required(payload, "amount", int),
-                amount_paid_paise=self._required(payload, "amount_paid", int),
-                amount_due_paise=self._required(payload, "amount_due", int),
+                status=status,
+                amount_paise=amount,
+                amount_paid_paise=amount_paid,
+                amount_due_paise=amount_due,
                 currency=self._required(payload, "currency", str),
                 short_url=payload.get("short_url"),
+                customer_id=payload.get("customer_id"),
+                issued_at=payload.get("issued_at"),
+                expire_by=payload.get("expire_by"),
+                partial_payment=payload.get("partial_payment", False),
             )
         except ValidationError as exc:
             raise self._decode_error("invoice", payload.get("__request_id") or request_id) from exc
@@ -298,6 +314,8 @@ class RazorpayPaymentProvider:
                 "currency": request.currency,
                 "customer_id": request.customer_id,
                 "receipt": request.receipt,
+                "partial_payment": request.partial_payment,
+                **({"expire_by": request.expire_by} if request.expire_by is not None else {}),
                 "sms_notify": False,
                 "email_notify": False,
                 "line_items": [

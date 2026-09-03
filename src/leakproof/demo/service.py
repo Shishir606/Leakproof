@@ -19,6 +19,8 @@ from leakproof.demo.contracts import (
     DemoSessionCreateRequest,
     DemoSessionState,
     EmailMode,
+    InvoiceRecoveryBootstrap,
+    InvoiceSessionCreated,
     RecoveryBootstrap,
     assert_session_transition,
     live_case_dedupe_key,
@@ -191,8 +193,12 @@ def create_demo_session(
     limiter: RateLimiter,
     settings: Settings,
     now: datetime | None = None,
-) -> DemoSessionCreated:
-    if request.scenario_type not in {LeakType.PAYMENT_FAILURE, LeakType.CHECKOUT_ABANDON}:
+) -> DemoSessionCreated | InvoiceSessionCreated:
+    if request.scenario_type not in {
+        LeakType.PAYMENT_FAILURE,
+        LeakType.CHECKOUT_ABANDON,
+        LeakType.INVOICE_OVERDUE,
+    }:
         raise ValueError("scenario_not_implemented")
     now = _as_utc(now or datetime.now(UTC))
     secret = _signing_secret(settings)
@@ -205,6 +211,13 @@ def create_demo_session(
     )
     if not decision.allowed:
         raise DemoRateLimitExceeded(decision.retry_after_seconds, "sessions_per_ip")
+
+    if request.scenario_type == LeakType.INVOICE_OVERDUE:
+        from leakproof.demo.invoices import create_invoice_session
+
+        return create_invoice_session(
+            session, request, provider=provider, settings=settings, now=now
+        )
 
     session_id = new_id("demo")
     customer_id = new_id("demo_customer")
@@ -344,6 +357,10 @@ def issue_demo_recovery_token(
         DemoSessionState.CHECKOUT_OPEN,
     }:
         raise RecoveryOrderNotAvailable("the order is not available for recovery")
+    if demo.primary_entity_type == "invoice":
+        from leakproof.demo.invoices import invoice_recovery_token
+
+        return invoice_recovery_token(demo, settings=settings, now=now)
     if not order_recovery_supported(session, demo):
         raise RecoveryOrderNotAvailable("this recovery surface is not implemented")
     return issue_recovery_token(
@@ -365,7 +382,7 @@ def get_recovery_bootstrap(
     provider: PaymentProvider,
     settings: Settings,
     now: datetime | None = None,
-) -> RecoveryBootstrap:
+) -> RecoveryBootstrap | InvoiceRecoveryBootstrap:
     """Verify all token bindings and re-read payment truth before reopening Checkout."""
     now = _as_utc(now or datetime.now(UTC))
     try:
@@ -373,12 +390,18 @@ def get_recovery_bootstrap(
             signed_token,
             _signing_secret(settings),
             now=now,
-            expected_purpose=RecoveryPurpose.ORDER_CHECKOUT,
         )
     except RecoveryTokenExpired as exc:
         raise RecoveryExpired("recovery token has expired") from exc
     except InvalidRecoveryToken as exc:
         raise RecoveryTokenInvalid("invalid recovery token") from exc
+
+    if claims.purpose == RecoveryPurpose.INVOICE_HOSTED_PAYMENT:
+        from leakproof.demo.invoices import invoice_bootstrap
+
+        return invoice_bootstrap(session, claims, provider=provider, settings=settings, now=now)
+    if claims.purpose != RecoveryPurpose.ORDER_CHECKOUT:
+        raise RecoveryTokenInvalid("invalid recovery token purpose")
 
     demo = session.scalar(
         select(DemoSession).where(DemoSession.id == claims.session_id).with_for_update()

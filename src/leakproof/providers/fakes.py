@@ -6,9 +6,11 @@ from leakproof.demo.contracts import CaseInsight
 from leakproof.providers.contracts import (
     CaseInsightRequest,
     CaseInsightResult,
+    CreateInvoiceRequest,
     CreateOrderRequest,
     EmailSendRequest,
     EmailSendResult,
+    Invoice,
     Payment,
     PaymentOrder,
     ProviderError,
@@ -17,11 +19,70 @@ from leakproof.providers.contracts import (
 
 @dataclass
 class FakePaymentProvider:
+    invoices: dict[str, Invoice] = field(default_factory=dict)
+    invoice_create_calls: list[CreateInvoiceRequest] = field(default_factory=list)
+    invoice_issue_calls: list[str] = field(default_factory=list)
     orders: dict[str, PaymentOrder] = field(default_factory=dict)
     payments: dict[str, Payment] = field(default_factory=dict)
     create_calls: list[CreateOrderRequest] = field(default_factory=list)
     order_idempotency: dict[str, str] = field(default_factory=dict)
     failure: ProviderError | None = None
+
+    def create_invoice(self, request: CreateInvoiceRequest) -> Invoice:
+        self.invoice_create_calls.append(request)
+        if self.failure:
+            raise self.failure
+        invoice = Invoice(
+            id=f"inv_fake_{len(self.invoices) + 1}",
+            status="draft",
+            customer_id=request.customer_id,
+            amount_paise=request.amount_paise,
+            amount_paid_paise=0,
+            amount_due_paise=request.amount_paise,
+            currency=request.currency,
+            partial_payment=request.partial_payment,
+            expire_by=request.expire_by,
+        )
+        self.invoices[invoice.id] = invoice
+        return invoice
+
+    def issue_invoice(self, invoice_id: str) -> Invoice:
+        import time
+
+        self.invoice_issue_calls.append(invoice_id)
+        invoice = self.fetch_invoice(invoice_id).model_copy(
+            update={
+                "status": "issued",
+                "issued_at": int(time.time()),
+                "order_id": f"order_{invoice_id}",
+                "short_url": "https://rzp.io/i/fixture",
+            }
+        )
+        self.invoices[invoice.id] = invoice
+        return invoice
+
+    def fetch_invoice(self, invoice_id: str) -> Invoice:
+        if self.failure:
+            raise self.failure
+        if invoice_id not in self.invoices:
+            raise ProviderError(
+                "razorpay",
+                "fetch_invoice",
+                "not_found",
+                False,
+                "Invoice unavailable",
+                status_code=404,
+            )
+        return self.invoices[invoice_id]
+
+    def list_invoices(self, *, subscription_id: str | None = None) -> list[Invoice]:
+        if self.failure:
+            raise self.failure
+        return [
+            i
+            for i in self.invoices.values()
+            if subscription_id is None or i.subscription_id == subscription_id
+        ]
 
     def create_order(self, request: CreateOrderRequest) -> PaymentOrder:
         self.create_calls.append(request)
@@ -84,8 +145,7 @@ class FakeCaseInsightProvider:
             raise self.failure
         insight = self.result or CaseInsight(
             summary=(
-                "The payment needs another customer-authorized attempt "
-                f"({request.failure_class})."
+                f"The payment needs another customer-authorized attempt ({request.failure_class})."
             ),
             probable_cause=f"Tier 1 classified the case as {request.failure_class}.",
             evidence=[f"Amount band: {request.amount_band}"],

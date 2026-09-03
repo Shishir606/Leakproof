@@ -380,6 +380,7 @@ def record_recovery(session: Session, signal: RecoverySignal) -> RecoveryCase | 
     if obligation.reconciliation_required:
         return None
     settlement = None
+    new_settlement = False
     if signal.payment_id:
         settlement = session.scalar(
             select(Settlement).where(
@@ -397,6 +398,7 @@ def record_recovery(session: Session, signal: RecoverySignal) -> RecoveryCase | 
             ):
                 raise ValueError("payment settlement conflicts with its existing obligation")
         else:
+            new_settlement = True
             settlement = Settlement(
                 merchant_id=signal.scope.merchant_id,
                 provider=signal.scope.provider,
@@ -470,7 +472,7 @@ def record_recovery(session: Session, signal: RecoverySignal) -> RecoveryCase | 
     if fully_paid:
         obligation.settled_at = obligation.settled_at or signal.occurred_at
         obligation.outstanding_paise = 0
-    if case and case.outcome != CaseOutcome.RECOVERED:
+    if case and case.outcome != CaseOutcome.RECOVERED and (fully_paid or new_settlement):
         append_event(
             session,
             case,

@@ -293,3 +293,72 @@ pending email is cancelled when dispatched, and a new rehearsal must be started.
 
 **Provider status: PENDING.** No human Razorpay payment, current live acceptance export, or new
 recipient-delivery proof was produced by this implementation step.
+
+## Track B — invoice recovery acceptance
+
+Track B is implemented and contract/browser tested. A real provider rehearsal is still pending.
+The browser fixtures and `artifacts/track-b/contract/` exports are simulated evidence. They do not
+establish a Razorpay invoice, webhook registration, email delivery, or payment.
+
+1. Configure the existing live-demo deployment with a Razorpay **test** key and an existing
+   Test Mode customer ID in `LEAKPROOF_DEMO_INVOICE_CUSTOMER_ID`. The recipient email is independent
+   of this provider customer; an email address never selects or establishes invoice ownership.
+   The API creates a non-GST draft with provider SMS/email disabled and partial payments enabled,
+   then issues that same invoice. GST invoices remain Dashboard setup. No new provider customer
+   or recipient is created automatically.
+2. Keep the existing migration head `0011_multi_resource`. Deploy the updated API, worker, Beat,
+   and dashboard together. No new migration is needed. Beat uses the existing
+   `leakproof.poll_invoice_aging` task, now every `LEAKPROOF_INVOICE_RECONCILE_SECONDS` (default 30).
+   Reconciliation reads invoices registered to this configured merchant; it does not import the
+   account's unregistered invoices or infer a due date for them.
+3. Register/verify the existing HTTPS webhook endpoint in Razorpay Test Mode for
+   `invoice.partially_paid`, `invoice.paid`, and `invoice.expired`, retaining payment/order events.
+   Use the matching secret and merchant configuration. Confirm signed delivery reaches the inbox
+   and the worker processes it. A populated secret alone does not establish event delivery.
+4. Set `LEAKPROOF_DEMO_INVOICE_DUE_SECONDS` (default 60) for the rehearsal. The persisted policy is
+   **setup time plus this interval**. This is application business aging, independent of provider
+   status and `expire_by`. The UI displays both dates. For a separate expiry rehearsal set
+   `LEAKPROOF_DEMO_INVOICE_EXPIRY_MINUTES=16` and `LEAKPROOF_DEMO_SESSION_TTL_MINUTES=60`; the
+   default 60-minute provider expiry exceeds the default 30-minute session lifetime. Respect
+   Razorpay's minimum future expiry and allow provider time to pass.
+5. Open `/demo`, select **Overdue invoice**, and create the test invoice. An optional recipient
+   receives email only if allowlisted, enabled, and permitted by the existing contact/budget gate.
+   Otherwise the action remains a preview. Wait for the business due date and Beat reconciliation;
+   one `INVOICE_OVERDUE` case should appear with the original detected balance and current outstanding.
+6. Choose **Continue recovery**, then **Continue original invoice**. Each click re-fetches provider
+   truth. The approved URL must be the original `https://rzp.io/i/...` invoice page. As a human,
+   pay part of the invoice, return to the dashboard, and wait for reconciliation. The case stays
+   open, current outstanding decreases, and original detected balance stays fixed. Pay the remaining
+   balance on the same invoice. Full invoice settlement backed by captured payment IDs closes the
+   same case; overlapping notifications cannot add the invoice total a second time.
+7. With a separate unpaid invoice, wait for expiry or cancel it manually in the Dashboard. Do not
+   cancel a partially paid invoice. Expect **merchant review**, no payment CTA, and no recovery
+   credit for expiry/cancellation. Recovery never extends expiry, issues another invoice, creates
+   another order, or creates a Payment Link. A stale link is rechecked before any hosted navigation.
+   Unknown/contradictory balances and provider outages hold the CTA and retry; they do not prove payment.
+8. Download **acceptance evidence** from the authenticated dashboard. Partial/full settlement and
+   non-payable fallback use separate acceptance checks. Incomplete exports retain failed checks.
+   Alternatively use the existing capture CLI, supplying the token through its environment variable:
+
+   ```sh
+   uv run python scripts/capture_api_acceptance.py \
+     --session-id "$TRACK_B_SESSION_ID" --scenario-type INVOICE_OVERDUE \
+     --output artifacts/api-acceptance/invoice-partial-full-new.json
+   uv run python scripts/validate_acceptance_artifacts.py \
+     artifacts/api-acceptance/invoice-partial-full-new.json --require-live
+   ```
+
+   Use a new filename for the separate expired/cancelled capture. Do not overwrite historical
+   provider artifacts or change simulated provenance labels. Captures exclude tokens, recipients,
+   hosted URLs, and provider invoice/payment/order/customer IDs.
+
+If create fails, inspect the provider Dashboard/ledger before starting another setup: a timed-out
+write may have reached Razorpay. If issue fails, the app retains the exact draft ID and reports
+`ACTION_REQUIRED`; the job only re-fetches it. A merchant may inspect/issue that draft in the
+Dashboard. Recovery never retries setup writes. An issuance timeout that actually succeeded can
+be discovered by reconciliation; its original failed-call evidence remains visible.
+
+Source checks on 2026-09-03: Razorpay's [invoice creation contract](https://razorpay.com/docs/api/payments/invoices/create-with-customer-id/)
+provides notification controls, partial payments and minimum future expiry; its
+[invoice states](https://razorpay.com/docs/payments/invoices/states/) prohibit customer payments
+on expired/cancelled invoices. These are documented capabilities, not account acceptance evidence.

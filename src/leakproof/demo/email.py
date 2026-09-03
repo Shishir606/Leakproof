@@ -58,7 +58,7 @@ def _demo_for_case(session: Session, case: RecoveryCase) -> DemoSession | None:
     for demo in session.scalars(
         select(DemoSession).where(DemoSession.merchant_id == case.merchant_id)
     ):
-        if order_recovery_supported(session, demo):
+        if order_recovery_supported(session, demo) or demo.primary_entity_type == "invoice":
             owner = case_for_session(session, demo)
             if owner is not None and owner.id == case.id:
                 return demo
@@ -192,10 +192,24 @@ def execute_demo_recovery_email(
     provider: EmailProvider,
     settings: Settings,
     now: datetime | None = None,
+    invoice_provider=None,
 ) -> EmailExecutionResult:
     """Execute a live email once, degrading every policy/budget block to a safe preview."""
     attempted_at = _utc(now or datetime.now(UTC))
-    action = session.scalar(select(Action).where(Action.id == action_id).with_for_update())
+    candidate = session.get(Action, action_id)
+    candidate_case = session.get(RecoveryCase, candidate.case_id) if candidate else None
+    candidate_demo = _demo_for_case(session, candidate_case) if candidate_case else None
+    if candidate_demo and candidate_demo.primary_entity_type == "invoice":
+        from leakproof.demo.invoices import invoice_scope
+        from leakproof.provider_resources import _lock_scope
+
+        _lock_scope(session, invoice_scope(candidate_demo))
+    action = session.scalar(
+        select(Action)
+        .where(Action.id == action_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if action is None:
         raise LookupError(action_id)
     previous = session.scalar(select(EmailDelivery).where(EmailDelivery.case_id == action.case_id))
@@ -225,12 +239,40 @@ def execute_demo_recovery_email(
         demo.state = "EXPIRED"
         demo.updated_at = attempted_at
         append_event(
-            session, case, kind="ACTED", actor="live_demo_planner",
-            payload={"action_type": "email_link", "status": "cancelled",
-                     "reason": "session_expired"},
+            session,
+            case,
+            kind="ACTED",
+            actor="live_demo_planner",
+            payload={
+                "action_type": "email_link",
+                "status": "cancelled",
+                "reason": "session_expired",
+            },
         )
         session.commit()
         return EmailExecutionResult(action.id, "cancelled")
+
+    invoice = None
+    if demo.primary_entity_type == "invoice":
+        from leakproof.demo.invoices import invoice_view, reconcile_invoice
+        from leakproof.providers.factory import get_payment_provider
+
+        try:
+            reconcile_invoice(
+                session,
+                demo.id,
+                provider=invoice_provider or get_payment_provider(),
+                settings=settings,
+                now=attempted_at,
+                commit=False,
+            )
+        except ProviderError:
+            return EmailExecutionResult(action.id, "provider_retry")
+        invoice = invoice_view(session, demo, attempted_at)
+        if invoice["disposition"] != "payable" or case.outcome == "RECOVERED":
+            action.status = "cancelled"
+            session.commit()
+            return EmailExecutionResult(action.id, "cancelled")
 
     if not settings.outbound_email_enabled:
         return _preview(session, action, demo, status="preview_only", now=attempted_at)
@@ -298,11 +340,13 @@ def execute_demo_recovery_email(
 
     token = issue_demo_recovery_token(session, demo.id, settings=settings, now=attempted_at)
     recovery_url = f"{settings.public_base_url.rstrip('/')}/recover/{quote(token, safe='')}"
+    template_id = "util_invoice_recovery_email_v1" if invoice else RECOVERY_EMAIL_TEMPLATE_ID
+    amount = invoice["outstanding_balance_paise"] if invoice else case.amount_at_risk
     message = TemplateRegistry().render(
-        RECOVERY_EMAIL_TEMPLATE_ID,
+        template_id,
         {
             "customer_ref": "there",
-            "amount": f"INR {case.amount_at_risk / 100:,.2f}",
+            "amount": f"INR {amount / 100:,.2f}",
             "link": recovery_url,
         },
         language="en-IN",
@@ -315,9 +359,11 @@ def execute_demo_recovery_email(
                 action_id=action.id,
                 case_id=case.id,
                 recipient=recipient,
-                template_id=RECOVERY_EMAIL_TEMPLATE_ID,
+                template_id=template_id,
                 template_variables={
-                    "subject": RECOVERY_EMAIL_SUBJECT,
+                    "subject": "Your invoice has an outstanding balance"
+                    if invoice
+                    else RECOVERY_EMAIL_SUBJECT,
                     "body": message.body,
                     "recovery_url": recovery_url,
                 },

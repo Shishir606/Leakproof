@@ -19,6 +19,8 @@ from leakproof.demo.contracts import (
     RecoveryActionProjection,
     RecoveryBootstrap,
     ResendWebhookEnvelope,
+    ResourceRecoveryBootstrap,
+    ResourceSessionCreated,
     assert_session_transition,
     live_case_dedupe_key,
 )
@@ -41,6 +43,8 @@ __all__ = [
     "RazorpayWebhookEnvelope",
     "RecoveryActionProjection",
     "RecoveryBootstrap",
+    "ResourceSessionCreated",
+    "ResourceRecoveryBootstrap",
     "ResendWebhookEnvelope",
     "assert_session_transition",
     "live_case_dedupe_key",

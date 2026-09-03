@@ -15,7 +15,9 @@ import httpx2
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--session-id", required=True)
-    parser.add_argument("--scenario-type", choices=["CHECKOUT_ABANDON", "PAYMENT_FAILURE"])
+    parser.add_argument(
+        "--scenario-type", choices=["CHECKOUT_ABANDON", "PAYMENT_FAILURE", "INVOICE_OVERDUE"]
+    )
     parser.add_argument("--base-url", default="http://localhost:8000")
     parser.add_argument(
         "--token-env",

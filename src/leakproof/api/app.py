@@ -32,6 +32,8 @@ from leakproof.demo import (
     RazorpayWebhookEnvelope,
     RecoveryBootstrap,
     ResendWebhookEnvelope,
+    ResourceRecoveryBootstrap,
+    ResourceSessionCreated,
 )
 from leakproof.demo.acceptance import build_demo_acceptance_export
 from leakproof.demo.projection import get_demo_session_projection
@@ -445,7 +447,7 @@ async def resend_webhook(
 
 @app.post(
     "/demo/sessions",
-    response_model=DemoSessionCreated,
+    response_model=ResourceSessionCreated,
     status_code=status.HTTP_201_CREATED,
     responses={429: {"model": APIError}, 502: {"model": APIError}, 503: {"model": APIError}},
 )
@@ -457,7 +459,11 @@ def create_demo_session_route(
     limiter: DemoRateLimiterDep,
 ) -> DemoSessionCreated | JSONResponse:
     settings = get_settings()
-    if payload.scenario_type not in {LeakType.PAYMENT_FAILURE, LeakType.CHECKOUT_ABANDON}:
+    if payload.scenario_type not in {
+        LeakType.PAYMENT_FAILURE,
+        LeakType.CHECKOUT_ABANDON,
+        LeakType.INVOICE_OVERDUE,
+    }:
         return contract_error(409, "scenario_not_implemented", "This scenario is not available yet")
     if not settings.demo_sessions_enabled:
         return contract_error(
@@ -495,7 +501,7 @@ def create_demo_session_route(
         return contract_error(
             503 if exc.retryable else 502,
             exc.error_class,
-            "Razorpay order creation failed",
+            "Razorpay session setup failed; check provider setup before retrying",
             retryable=exc.retryable,
         )
 
@@ -659,7 +665,7 @@ def checkout_payment_verification_route(
 
 @app.get(
     "/recover/{signed_token}",
-    response_model=RecoveryBootstrap,
+    response_model=ResourceRecoveryBootstrap,
     responses={
         404: {"model": APIError},
         409: {"model": APIError},

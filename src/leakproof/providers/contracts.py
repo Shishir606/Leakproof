@@ -52,6 +52,8 @@ class Payment:
     status: str
     method: str | None = None
     request_id: str | None = None
+    created_at: int | None = None
+    invoice_id: str | None = None
 
 
 @runtime_checkable
@@ -146,6 +148,10 @@ from leakproof.models.resources import EntityRef, ResourceContract  # noqa: E402
 
 
 class Invoice(ResourceContract):
+    customer_id: str | None = Field(default=None, pattern=r"^cust_[A-Za-z0-9_]+$")
+    issued_at: int | None = Field(default=None, ge=0, strict=True)
+    expire_by: int | None = Field(default=None, ge=0, strict=True)
+    partial_payment: bool = False
     request_id: str | None = None
     id: str = Field(pattern=r"^inv_[A-Za-z0-9_]+$")
     order_id: str | None = Field(default=None, pattern=r"^order_[A-Za-z0-9_]+$")
@@ -193,6 +199,8 @@ class ProviderEntityStatus(ResourceContract):
 
 
 class CreateInvoiceRequest(ResourceContract):
+    partial_payment: bool = True
+    expire_by: int | None = Field(default=None, ge=0, strict=True)
     amount_paise: int = Field(gt=0)
     currency: str = Field(pattern=r"^[A-Z]{3}$")
     receipt: str = Field(min_length=1, max_length=40)

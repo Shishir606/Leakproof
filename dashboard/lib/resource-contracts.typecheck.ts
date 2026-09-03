@@ -13,7 +13,7 @@ export function signalKind(signal: ProviderSignal): string {
 export function recoveryPurpose(bootstrap: ResourceRecoveryBootstrap): string {
   switch (bootstrap.purpose) {
     case "order_checkout": return bootstrap.razorpay_order_id;
-    case "invoice_hosted_payment": return bootstrap.redirect_url;
+    case "invoice_hosted_payment": return bootstrap.redirect_url ?? "merchant_review";
     case "subscription_method_update": return bootstrap.subscription_id;
     default: return assertNever(bootstrap);
   }

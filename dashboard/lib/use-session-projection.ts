@@ -19,10 +19,10 @@ export function useSessionProjection(session: DemoSession | null | undefined) {
     const poll = async () => {
       try {
         if (Date.parse(session.expires_at) <= Date.now()) throw new DemoApiError("Session expired", "session_expired");
-        await flushTelemetry(session);
+        if (session.primary_entity_type === "order") await flushTelemetry(session);
         const next = await getSessionProjection(session);
         if (stopped) return;
-        if (!["LIVE_PROVIDER_VERIFIED", "LIVE_TELEMETRY_PROVIDER_RECONCILED"].includes(next.data_provenance)) {
+        if (next.primary_entity_type !== "invoice" && !["LIVE_PROVIDER_VERIFIED", "LIVE_TELEMETRY_PROVIDER_RECONCILED"].includes(next.data_provenance)) {
           throw new DemoApiError(`Live Demo rejected ${next.data_provenance} data. Use Scenario Lab for simulated results.`, "provenance_mismatch");
         }
         setProjection(next);

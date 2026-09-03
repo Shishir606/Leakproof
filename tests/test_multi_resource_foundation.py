@@ -324,7 +324,9 @@ def test_scenario_selection_is_exhaustive_but_unimplemented_routes_are_disabled(
 ):
     assert DemoSessionCreateRequest().scenario_type == LeakType.PAYMENT_FAILURE
     response = client.post("/demo/sessions", json={"scenario_type": scenario.value})
-    enabled = scenario in {LeakType.PAYMENT_FAILURE, LeakType.CHECKOUT_ABANDON}
+    enabled = scenario in {
+        LeakType.PAYMENT_FAILURE, LeakType.CHECKOUT_ABANDON, LeakType.INVOICE_OVERDUE
+    }
     assert response.status_code == (201 if enabled else 409)
     capabilities = client.get("/demo/scenarios").json()
     assert {item["scenario_type"] for item in capabilities} == {item.value for item in LeakType}
