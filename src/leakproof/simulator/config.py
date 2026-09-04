@@ -131,7 +131,6 @@ class ScenariosConfig(StrictModel):
 class BreadthConfig(StrictModel):
     checkout_abandonment: int = Field(gt=0)
     subscription_halt: int = Field(gt=0)
-    mandate_broken: int = Field(gt=0)
 
 
 class SimulatorParameters(StrictModel):

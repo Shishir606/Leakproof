@@ -56,20 +56,6 @@ SUBSCRIPTION_CHECKS = {
     "no_blocking_provider_failure",
     "intentional_states_have_no_cta",
 }
-MANDATE_CHECKS = {
-    "case_detected",
-    "qualified_mandate_evidence",
-    "exact_invoice_owned",
-    "authorization_repair_separate_from_revenue",
-    "razorpay_owns_retries",
-    "no_app_owned_debit",
-    "method_update_rechecked",
-    "cycle_payment_ledger_unique",
-    "captured_payment_globally_unique",
-    "audit_projection_replay_matches",
-    "no_blocking_provider_failure",
-    "intentional_states_have_no_cta",
-}
 
 FORBIDDEN_KEY_FRAGMENTS = {
     "action_id",
@@ -168,18 +154,6 @@ def validate_file(path: Path, *, require_live: bool) -> DemoAcceptanceExport:
             required.add("activation_not_counted_as_revenue")
         if artifact.case is None or artifact.case.leak_type != "SUBSCRIPTION_HALT":
             errors.append("subscription evidence requires a subscription-halt case")
-    if scenario == "MANDATE_BROKEN":
-        required = MANDATE_CHECKS.copy()
-        if artifact.session.state == "RECOVERED":
-            required |= {
-                "exact_invoice_settled",
-                "same_case_closed",
-                "recovered_revenue_is_captured",
-            }
-        else:
-            required.add("activation_not_counted_as_revenue")
-        if artifact.case is None or artifact.case.leak_type != "MANDATE_BROKEN":
-            errors.append("mandate evidence requires a mandate-broken case")
     if artifact.data_provenance == DataProvenance.LIVE_TELEMETRY_PROVIDER_RECONCILED:
         required |= ABANDONMENT_CHECKS
         if artifact.case is None or artifact.case.leak_type != "CHECKOUT_ABANDON":
@@ -253,7 +227,6 @@ def main() -> int:
                 "CHECKOUT_ABANDON",
                 "INVOICE_OVERDUE",
                 "SUBSCRIPTION_HALT",
-                "MANDATE_BROKEN",
             }
             missing = sorted(required - found)
             if missing:

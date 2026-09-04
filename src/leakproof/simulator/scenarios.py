@@ -221,22 +221,4 @@ def build_breadth_signals(
             )
         )
 
-    customer_offset += parameters.breadth.checkout_abandonment
-    for index in range(parameters.breadth.mandate_broken):
-        signals.append(
-            ScenarioSignal(
-                scenario="baseline",
-                leak_type=LeakType.MANDATE_BROKEN,
-                failure_class="INSTRUMENT_DEAD",
-                entity_type="token",
-                customer_index=(customer_offset + index) % customer_count,
-                occurred_at=as_of - timedelta(hours=2 + index % 72),
-                evidence={
-                    "status": "revoked" if index % 2 == 0 else "expired",
-                    "authorization_valid": False,
-                    "error_reason": "mandate_revoked" if index % 2 == 0 else "mandate_expired",
-                },
-            )
-        )
-
     return signals

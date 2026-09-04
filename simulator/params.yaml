@@ -55,4 +55,3 @@ scenarios:
 breadth:
   checkout_abandonment: 100
   subscription_halt: 100
-  mandate_broken: 100

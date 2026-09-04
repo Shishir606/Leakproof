@@ -176,7 +176,7 @@ seed:
 	LEAKPROOF_DATABASE_URL=postgresql+psycopg://leakproof:leakproof@localhost:55432/leakproof uv run python scripts/seed_simulator.py
 
 batch:
-	LEAKPROOF_DATABASE_URL=postgresql+psycopg://leakproof:leakproof@localhost:55432/leakproof uv run python scripts/run_batch.py
+	LEAKPROOF_MODE=simulation LEAKPROOF_DATABASE_URL=postgresql+psycopg://leakproof:leakproof@localhost:55432/leakproof uv run python scripts/run_batch.py
 
 .PHONY: track-a-contract track-a-browser
 TRACK_A_ARTIFACT_DIR ?= artifacts/track-a

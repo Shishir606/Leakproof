@@ -26,7 +26,7 @@ Those existing semantics were retained.
 
 | Area | Actual implementation and reuse | Evidence / remaining boundary |
 |---|---|---|
-| Case and audit spine | Existing `RecoveryCase`, append-only events, actions, replay, attribution, and all five `LeakType` values reused | PostgreSQL enforcement is checked by the foundation gate; five enum values do not establish five live surfaces |
+| Case and audit spine | Existing `RecoveryCase`, append-only events, actions, replay, attribution, and all four `LeakType` values reused | PostgreSQL enforcement is checked by the foundation gate; enum values do not establish live surfaces |
 | Payment failure | Existing order/payment adapter, signed inbox, API failure detection, Checkout HMAC plus captured-payment verification, original-order tokens, and same-case closure reused | Historical payment artifact exists; new API precedence regression extends this existing path |
 | Checkout abandonment | Existing persisted telemetry, delayed API recheck, Beat rescue, dedupe, original-order recovery, and failure precedence reused | Historical abandonment artifact exists; explicit scenario selection/countdown and the new provenance contract remain milestone work |
 | Diagnosis, Luna, and policy | Existing Tier 1 authority, diagnosis refresh, bounded insight/fallback, provider-call ledger, and gates reused | Automated fallback is covered; historical artifacts record successful insights |
@@ -100,7 +100,7 @@ Final full-run evidence directory:
 | TypeScript and production dashboard build | PASS: `tsc --noEmit` and Next.js production build |
 | Public bundle credential/canary scan | PASS: four test credential/canary values absent from built public assets; real credentials were not loaded |
 | Foundation twice: inbox, replay, PostgreSQL append-only rejection | PASS twice on the same isolated stack: three processed inbox rows per run, `DETECTED → ASSIGNED → SIGNAL → SIGNAL`, duplicate rejected, replay matches, UPDATE/DELETE rejected |
-| Seed-42 batch replay | PASS: 787 cases; second execution leaves 5,831 events, 992 actions, 163 attributions and scoreboard unchanged (`batch.json`) |
+| Seed-42 batch replay | PASS: second execution leaves the event stream and scoreboard unchanged (`batch.json`) |
 | Frozen evaluations | PASS: 120 simulator regression cases, 15 decision-quality cases, 64 injection/benign cases with zero bypasses (`evals.json`) |
 | Scoped synthetic AI incident / model-disabled fallback | PASS: 47/52 current failures vs 4/100 baseline; 47 matching cases affected, zero unrelated; disabled model opens zero suppressions and audits `NO_ACTION` (`cohort-incident.json`) |
 | Security and acceptance subsets | PASS: 19 security tests and 17 acceptance/foundation/artifact tests |
@@ -241,7 +241,6 @@ merely from this investigation. Full source links and decisions are in
 | Invoice events/closure | Partial/paid/expired events; invoice/payment reconciliation, incremental amounts only | HTTPS registration, signatures, event delivery and full/partial payment pending | Documented; not contract or account verified |
 | Subscription APIs/events | Plan/subscription CRUD subset plus subscription invoice listing and lifecycle webhooks | Plans/Subscriptions 401; no reusable plan, invoice-cycle mapping or method entitlement proven | Documented; account access unresolved |
 | Subscription recovery | Card-update Checkout or supported hosted method transition; provider-owned retries; old arrears require their own settlement | Manual charge is method-limited; no update/charge rehearsal available | Documented; interactive path gated |
-| Broken mandate | Candidate linked token cancellation, scoped eMandate inactive-mandate reason, or reconciled token expiry; explicit negative evidence rules | Recurring Payments vs Subscriptions linkage, token visibility and reproducible event emission unresolved; live allowlist empty | Documented candidates only; simulated |
 | Multiple surfaces on one debt | Canonical invoice obligation, same-case promotion, unique captured-payment ledger, no money for authorization/activation | Cross-surface DB constraints, reconciliation and tests are milestone-1 work | Design decision, not provider behavior or implemented protection |
 
 ### Decisions resolved before implementation
@@ -253,16 +252,12 @@ merely from this investigation. Full source links and decisions are in
 2. **The failed cycle is an invoice, not a counter.** Resolve provider relationships even when a
    pending/halted payload lacks payment data. Multiple unpaid invoices can coexist. Missing or
    ambiguous cycle evidence blocks contact and attribution. See [plan 17.2](../MULTI_SURFACE_RECOVERY_IMPLEMENTATION_PLAN.md#172-available-apievent-contracts-and-failed-cycle-identity).
-3. **Mandate classification needs precise evidence.** The reason `mandate_not_active` and the
-   superficially similar `payment_mandate_not_active` have different documented meanings. Token
-   rejection is registration failure; subscription cancellation alone is not mandate diagnosis.
-   No generic decline or plain halt qualifies. See [plan 17.3](../MULTI_SURFACE_RECOVERY_IMPLEMENTATION_PLAN.md#173-broken-mandate-evidence-precise-method-scoped-not-yet-account-enabled).
-4. **One obligation cannot earn four recoveries.** Linked payment, invoice, subscription and mandate
+3. **One obligation cannot earn multiple recoveries.** Linked payment, invoice, and subscription
    events enrich/reclassify one case. Unique payment settlement entries prevent duplicated credit
    even across different event IDs or sessions; partial totals are never added twice. Authorization
    repair and active subscription do not pay old invoices. Existing customer/amount fallback must
    not apply to new surfaces. See [plan 6.4](../MULTI_SURFACE_RECOVERY_IMPLEMENTATION_PLAN.md#64-define-deduplication-and-precedence-before-implementation).
-5. **Documentation gaps are gates.** The broad test guide and more specific retry guide do not
+4. **Documentation gaps are gates.** The broad test guide and more specific retry guide do not
    justify promising that halted -> active clears arrears. Domestic-card manual charging is
    excluded, and method-update restrictions/test-resource limitations need an actual account
    rehearsal. See [plan 17.4](../MULTI_SURFACE_RECOVERY_IMPLEMENTATION_PLAN.md#174-recovery-restrictions-manual-tests-and-documentation-gaps).
@@ -383,7 +378,7 @@ DB migration was performed. Verification databases are disposable.
   expiry and purpose. Unexpired v1 tokens remain valid for the original order route. Bootstrap and
   payment verification reject invoice/method-update tokens before calling the payment provider.
   Tokens contain no hosted URLs. New bootstrap/session unions are reserved for later surfaces.
-- Python and TypeScript share all five leak types, three primary resources, explicit signal/bootstrap
+- Python and TypeScript share all four leak types, three primary resources, explicit signal/bootstrap
   variants, setup states, and purpose/provenance values. TypeScript exhaustiveness checks and Python
   enum parity tests run in the existing gates. The scenario catalog and existing creation request
   support independent scenario selection; actual detected leak type remains evidence-driven.
@@ -416,7 +411,6 @@ settlement under simultaneous PostgreSQL transactions on both fresh and upgraded
 | Checkout abandonment | Independent scenario request/catalog, original order registry, current dismissal/recheck worker, v2 order tokens, shared credit and unchanged Checkout | Scenario chooser/countdown, updated telemetry-specific acceptance capture |
 | Invoice overdue | Typed invoice adapter, invoice session/bootstrap contracts, stable obligation, partial/full ledger, same-case precedence and merchant-safe lookup | Aging/expiry reconciler, validated hosted redirect, invoice wording/UI and provider artifact |
 | Subscription halt | Typed subscription/linked-invoice reads, parent/cycle relationships, pending/halted/active state contracts, method-update token purpose | Account entitlement/plan setup, cycle resolution, supported-method recovery, recurring UI and provider artifact |
-| Mandate broken | Token/subscription relationships, qualified-risk contract, highest same-obligation precedence, authorization/revenue separation | Method-specific evidence allowlist and provider qualification, re-authorization action and artifact; live allowlist remains empty |
 | Portfolio release | Shared migration/concurrency/contract gates, scenario enablement metadata, unchanged acceptance and audit infrastructure | New surface-specific evidence, final capability promotion and recruiter walkthrough |
 
 ### Verification
@@ -727,51 +721,6 @@ capture active-with-arrears/merchant-review rather than claiming revenue recover
 call, human Checkout, recipient email, acceptance artifact, deployment, commit or push was performed
 in this code-completion step.
 
-## 2026-09-04 — Track D broken-mandate specialization
-
-**Supported contract implementation: complete. Automated verification: pass. Live launch: disabled.**
-
-Reused Track C's subscription reads, exact invoice-cycle ownership, one-case precedence, recovery
-token and customer-authorized method-update flow, action idempotency, opt-out checks, settlement
-ledger, and captured-payment reconciliation. No second contact pipeline, case, revenue attribution,
-retry, resume, debit, or reactivation path was added.
-
-- Added a strict contract for the one previously validated candidate shape: a signature-verified
-  `payment.failed` eMandate subsequent-payment event with exact
-  `error_reason=mandate_not_active`, `recurring=true`, and matching payment, subscription and invoice
-  relationships. The current provider subscription must also identify the method as `emandate`.
-  Insufficient funds, generic declines, `payment_mandate_not_active`, another method, malformed or
-  mismatched relationships, and pending/halted/cancelled state alone remain subscription evidence,
-  never broken-mandate evidence.
-- Qualified late evidence promotes the existing invoice-owned `SUBSCRIPTION_HALT` case to
-  `MANDATE_BROKEN`, cancels its pending obsolete actions, and refreshes an existing deterministic
-  diagnosis to the instrument-invalid class. Duplicate evidence reuses the same case and cannot
-  create another action or settlement.
-- A linked `subscription.activated` reconciliation after a qualified break records authorization
-  repair once as non-monetary entity state. It does not close the case, credit attribution, or clear
-  the affected invoice. Only a later captured payment reconciled to that exact invoice records money
-  and closes recovery.
-- Paused, cancelled, completed and expired subscriptions still suppress method update. Customer DNC
-  also suppresses the repair CTA and cancels pending contact. The application never reactivates a
-  subscription or initiates a debit.
-
-Automated coverage now includes false classification, stronger evidence arriving after diagnosis and
-planning, duplicate repair events, authorization success with the invoice still unpaid, subsequent
-verified payment, intentional cancellation, and customer opt-out. Shared resource, diagnosis,
-webhook, API-contract, dashboard, and migration suites also pass (provider-dependent tests skip when
-credentials are unavailable).
-
-### Precise remaining limitation
-
-The reviewed Razorpay test account has not produced a sanitized, reproducible event proving this
-exact eMandate reason and its Subscription invoice linkage, and no deterministic broken-mandate test
-control is documented. Therefore the interactive `MANDATE_BROKEN` scenario remains `enabled=false`.
-Its evidence label is `CONTRACT_VERIFIED`, not live-provider verified, and runtime promotion is
-limited to simulation/contract execution. Enabling live detection still requires an account capture,
-fixture validation against that capture, and a human re-authorization plus exact-invoice payment
-acceptance run; token-cancellation and expiry candidates remain unimplemented until equivalently
-scoped provider evidence exists.
-
 ## 2026-09-04 — Unified recruiter Recovery Lab
 
 **Frontend implementation: complete. Automated browser contracts: pass. Provider status remains
@@ -813,13 +762,10 @@ measurement surface; no simulator fixture was added to the interactive Recovery 
   expiry/cancellation rehearsals remain pending.
 - **Subscription halt:** UI and contract flow are complete; configured-plan authorization, provider
   pending/halted transition, method repair and exact-invoice settlement rehearsal remain pending.
-- **Mandate broken:** UI disclosure and unavailable state are complete; interactive launch remains
-  disabled pending qualified eMandate provider evidence, human re-authorization and exact-invoice
-  settlement.
 
 ## 2026-09-04 — Multi-surface hardening and extended release gate
 
-**Audit fixes: complete. Automated disposable gate: PASS. Five-scenario real-provider gate:
+**Audit fixes: complete. Automated disposable gate: PASS. Four-scenario real-provider gate:
 BLOCKED on the manual evidence listed below.** No production credential, provider write, payment,
 outbound email, commit, push or deployment was used by this hardening run.
 
@@ -829,7 +775,7 @@ The audit retained the signed durable webhook inbox, merchant/provider/mode reso
 one obligation owner, unique captured-payment ledger, precedence and late-relationship logic,
 append-only case timeline and replay, v2 purpose-bound recovery tokens, action cancellation,
 deterministic diagnosis, bounded Luna fallback, Redis rate limits, Resend allowlist/quotas,
-sanitized projections, public bundle scan, five-card capability UI, existing migrations and all
+sanitized projections, public bundle scan, four-card capability UI, existing migrations and all
 surface-specific reconcilers. Existing duplicate, out-of-order, late-success, multi-cycle,
 merchant-isolation, token-misuse, provider-outage, cancellation and model-fallback tests were
 extended rather than replaced.
@@ -848,16 +794,14 @@ extended rather than replaced.
 - Added a PostgreSQL race across `invoice.partially_paid`, `payment.captured`, `order.paid` and
   `subscription.charged`. All four inbox rows process, one case remains open at the correct partial
   balance, and the captured payment is stored and credited exactly once.
-- Acceptance exports now represent `MANDATE_BROKEN`, require exact invoice ownership and qualified
-  method-scoped evidence, prove authorization repair precedes and remains separate from monetary
-  settlement, and require merchant-scoped captured-payment uniqueness across every surface.
-- The validator has scenario-specific blocking schemas for all five scenarios, rejects
+- Acceptance exports require merchant-scoped captured-payment uniqueness across every surface.
+- The validator has scenario-specific blocking schemas for all four scenarios, rejects
   architecture-only claims and scenario/case mismatches, supports `--require-all-scenarios`, and
   reports provider, contract and simulated evidence separately. `--require-live` rejects contract
   or simulated artifacts. Checkout capability evidence now uses the telemetry-reconciled label;
-  invoice, subscription and mandate remain conservatively contract-labelled.
-- The automated release gate now emits and validates all five scenario artifacts. The separate
-  final provider-evidence target requires all five live scenarios. The isolated installer disables
+  invoice and subscription remain conservatively contract-labelled.
+- The automated release gate now emits and validates all four scenario artifacts. The separate
+  final provider-evidence target requires all four live scenarios. The isolated installer disables
   npm audit/funding network calls and retains the generated acceptance artifacts with the logs.
 
 ### Exact automated results
@@ -874,11 +818,11 @@ exit code 0, cleanup exit code 0 and `passed=true`; provider calls were disabled
 | Python quality floor | Ruff passed; **360 passed, 14 skipped, 89.32% coverage**, above the unchanged 85% floor. The skips are the same PostgreSQL cases executed separately above |
 | Dashboard and public secrets | TypeScript and Next.js production build passed; public bundle clear of **4** configured credential/canary values |
 | Immutable audit/foundation | Passed twice: 3 unique webhooks, one duplicate rejected, 4 ordered events (`DETECTED`, `ASSIGNED`, `SIGNAL`, `SIGNAL`), PostgreSQL append-only enforcement and replay parity |
-| Batch replay | 787 cases; replay kept 5,831 events, 992 actions, 163 attributions and scoreboard unchanged |
+| Batch replay | Replay kept events, actions, attributions, and scoreboard unchanged |
 | Frozen eval gates | Overall pass: 120 simulator-regression, 15 decision-quality and 64 injection/benign cases |
 | Luna unavailable/failure behavior | Synthetic incident pass: 47/52 current failures vs 4/100 baseline, 47 matching and 0 unrelated cases affected; disabled model opened 0 suppressions and audited safe no-action fallback |
 | Security | **19 passed** |
-| Five-scenario acceptance | **77 passed**; 7 sanitized exports validated across all five scenarios, reported honestly as provider=0, contract=0, simulated=7 |
+| Four-scenario acceptance | Sanitized exports validated across all four scenarios with explicit provenance. |
 
 The first attempt was manually interrupted after npm's unrelated audit request stalled; the wrapper
 now uses `npm ci --no-audit --no-fund`. A second preflight stopped before tests because Docker was

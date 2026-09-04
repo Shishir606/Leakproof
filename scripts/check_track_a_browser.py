@@ -45,13 +45,6 @@ def scenario_capabilities():
             capability_evidence="CONTRACT_VERIFIED",
             reason="Configured plan required.",
         ),
-        dict(
-            scenario_type="MANDATE_BROKEN",
-            primary_entity_type="subscription",
-            enabled=False,
-            capability_evidence="CONTRACT_VERIFIED",
-            reason="Provider rehearsal pending.",
-        ),
     ]
 
 

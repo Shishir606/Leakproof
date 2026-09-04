@@ -28,7 +28,6 @@ from leakproof.models.domain import Arm, LeakType
 from leakproof.models.resources import (
     EntityRef,
     EntityStateSignal,
-    MandateInvalidEvidence,
     ObligationRef,
     ProviderScope,
     RecoverySignal,
@@ -55,44 +54,6 @@ from leakproof.services import NormalizedSignal, ensure_merchant, new_id
 
 TERMINAL_OR_INTENTIONAL = {"paused", "cancelled", "completed", "expired"}
 RISK_STATES = {"pending", "halted"}
-
-
-def qualified_mandate_evidence(payload: dict) -> MandateInvalidEvidence | None:
-    """Accept only the previously validated, relationship-complete eMandate shape."""
-    if payload.get("event") != "payment.failed":
-        return None
-    envelopes = payload.get("payload")
-    if not isinstance(envelopes, dict):
-        return None
-    payment_envelope = envelopes.get("payment")
-    payment = payment_envelope.get("entity") if isinstance(payment_envelope, dict) else None
-    invoice_envelope = envelopes.get("invoice")
-    invoice = invoice_envelope.get("entity") if isinstance(invoice_envelope, dict) else None
-    subscription_envelope = envelopes.get("subscription")
-    subscription = (
-        subscription_envelope.get("entity") if isinstance(subscription_envelope, dict) else None
-    )
-    if not all(isinstance(item, dict) for item in (payment, invoice, subscription)):
-        return None
-    try:
-        evidence = MandateInvalidEvidence(
-            evidence_type="emandate_subsequent_payment_failure",
-            payment_id=payment.get("id"),
-            subscription_id=payment.get("subscription_id"),
-            invoice_id=payment.get("invoice_id"),
-            method=payment.get("method"),
-            recurring=payment.get("recurring"),
-            error_reason=payment.get("error_reason"),
-        )
-    except (TypeError, ValueError):
-        return None
-    if (
-        invoice.get("id") != evidence.invoice_id
-        or invoice.get("subscription_id") != evidence.subscription_id
-        or subscription.get("id") != evidence.subscription_id
-    ):
-        return None
-    return evidence
 
 
 def utc(value: datetime) -> datetime:
@@ -300,8 +261,6 @@ def reconcile_subscription(
     source: str = "razorpay_api",
     operation: str = "reconcile_subscription",
     explicit_invoice_id: str | None = None,
-    mandate_evidence: MandateInvalidEvidence | None = None,
-    authorization_repaired: bool = False,
     commit: bool = True,
 ) -> RecoveryCase | None:
     from leakproof.demo.service import _record_provider_call
@@ -430,20 +389,6 @@ def reconcile_subscription(
                 )
             demo.amount_paise = affected.amount_paise
             demo.currency = affected.currency
-            qualified_mandate = bool(
-                mandate_evidence
-                and mandate_evidence.subscription_id == item.id
-                and mandate_evidence.invoice_id == affected.id
-                and item.payment_method == "emandate"
-                and settings.mode == "simulation"
-            )
-            risk_type = (
-                LeakType.MANDATE_BROKEN if qualified_mandate else LeakType.SUBSCRIPTION_HALT
-            )
-            prior_case_type = None
-            if obligation.case_id:
-                prior_case = session.get(RecoveryCase, obligation.case_id)
-                prior_case_type = prior_case.leak_type if prior_case else None
             if item.status in RISK_STATES and affected.amount_due_paise > 0:
                 case, _ = record_risk(
                     session,
@@ -454,59 +399,28 @@ def reconcile_subscription(
                         obligation=ref,
                         source=source,
                         occurred_at=now,
-                        leak_type=risk_type,
+                        leak_type=LeakType.SUBSCRIPTION_HALT,
                         customer_id=demo.customer_id,
                         amount_due_paise=affected.amount_due_paise,
                         baseline_paid_paise=affected.amount_paid_paise,
                         currency=affected.currency,
-                        mandate_evidence="qualified" if qualified_mandate else None,
                     ),
                     session_id=demo.id,
                     legacy_signal=NormalizedSignal(
                         merchant_id=demo.merchant_id,
                         customer_id=demo.customer_id,
-                        leak_type=risk_type,
+                        leak_type=LeakType.SUBSCRIPTION_HALT,
                         entity_type="subscription",
                         entity_id=item.id,
                         entity_root_id=affected.id,
                         amount_at_risk=affected.amount_due_paise,
                         currency=affected.currency,
-                        evidence={
-                            "source": source,
-                            "subscription_state": item.status,
-                            **(
-                                {
-                                    "error_reason": mandate_evidence.error_reason,
-                                    "payment_method": mandate_evidence.method,
-                                    "mandate_evidence": mandate_evidence.evidence_type,
-                                }
-                                if qualified_mandate
-                                else {}
-                            ),
-                        },
+                        evidence={"source": source, "subscription_state": item.status},
                         occurred_at=now,
                         dedupe_key_override=obligation.id,
                         arm_override=Arm.TREATMENT,
                     ),
                 )
-                if qualified_mandate:
-                    entity.safe_metadata = {
-                        **entity.safe_metadata,
-                        "mandate_broken": True,
-                        "mandate_evidence_type": mandate_evidence.evidence_type,
-                    }
-                    if prior_case_type and prior_case_type != LeakType.MANDATE_BROKEN.value:
-                        from leakproof.diagnosis import refresh_payment_diagnosis
-
-                        refresh_payment_diagnosis(
-                            session,
-                            case,
-                            {
-                                "error_reason": mandate_evidence.error_reason,
-                                "payment_method": mandate_evidence.method,
-                                "mandate_evidence": mandate_evidence.evidence_type,
-                            },
-                        )
                 demo.state = "AT_RISK"
             else:
                 case = session.get(RecoveryCase, obligation.case_id) if obligation.case_id else None
@@ -570,32 +484,6 @@ def reconcile_subscription(
                 "cycle_status": affected.status,
                 "cycle_due": affected.amount_due_paise,
             }
-            if (
-                authorization_repaired
-                and entity.safe_metadata.get("mandate_broken")
-                and not entity.safe_metadata.get("authorization_repaired")
-                and item.status in {"active", "authenticated"}
-                and item.status not in TERMINAL_OR_INTENTIONAL
-            ):
-                record_recovery(
-                    session,
-                    RecoverySignal(
-                        scope=subscription_scope(demo),
-                        entity=EntityRef(entity_type="subscription", entity_id=item.id),
-                        root=ref,
-                        obligation=ref,
-                        source=source,
-                        occurred_at=now,
-                        currency=affected.currency,
-                        settlement="authorization_repaired",
-                    ),
-                )
-                entity.status = item.status
-                entity.safe_metadata = {
-                    **entity.safe_metadata,
-                    "authorization_repaired": True,
-                    "authorization_repaired_at": now.isoformat(),
-                }
             if item.status in TERMINAL_OR_INTENTIONAL and case:
                 _cancel_actions(session, case)
             customer = session.get(Customer, demo.customer_id)
@@ -805,8 +693,6 @@ def process_subscription_webhook(
     )
     if not demo:
         return True, None
-    evidence = qualified_mandate_evidence(event.payload) if event.signature_verified else None
-    repaired = event.event_type == "subscription.activated"
     case = reconcile_subscription(
         session,
         demo.id,
@@ -815,8 +701,6 @@ def process_subscription_webhook(
         now=now,
         source="razorpay_webhook",
         explicit_invoice_id=invoice_id,
-        mandate_evidence=evidence,
-        authorization_repaired=repaired,
     )
     return True, case.id if case else None
 

@@ -188,13 +188,6 @@ def _scenario_artifact(scenario: str) -> dict:
             "same_case_closed",
             "recovered_revenue_is_captured",
         }
-    elif scenario == "MANDATE_BROKEN":
-        required = validator.MANDATE_CHECKS | {
-            "exact_invoice_settled",
-            "same_case_closed",
-            "recovered_revenue_is_captured",
-        }
-        payload["data_provenance"] = "CONTRACT_VERIFIED"
     payload["checks"] = [
         {
             "check": name,
@@ -207,7 +200,7 @@ def _scenario_artifact(scenario: str) -> dict:
     return payload
 
 
-def test_acceptance_validator_requires_all_five_scenarios_and_separates_contract_evidence(
+def test_acceptance_validator_requires_all_four_scenarios(
     tmp_path, monkeypatch, capsys
 ):
     for scenario in (
@@ -215,7 +208,6 @@ def test_acceptance_validator_requires_all_five_scenarios_and_separates_contract
         "CHECKOUT_ABANDON",
         "INVOICE_OVERDUE",
         "SUBSCRIPTION_HALT",
-        "MANDATE_BROKEN",
     ):
         (tmp_path / f"{scenario.casefold()}.json").write_text(
             json.dumps(_scenario_artifact(scenario))
@@ -226,15 +218,11 @@ def test_acceptance_validator_requires_all_five_scenarios_and_separates_contract
         ["validator", "--directory", str(tmp_path), "--require-all-scenarios"],
     )
     assert validator.main() == 0
-    assert "provider=4, contract=1, simulated=0" in capsys.readouterr().out
-
-    mandate_path = tmp_path / "mandate_broken.json"
-    with pytest.raises(ValueError, match="not live provider evidence"):
-        validator.validate_file(mandate_path, require_live=True)
+    assert "provider=4, contract=0, simulated=0" in capsys.readouterr().out
 
 
 def test_acceptance_validator_rejects_architecture_label_and_scenario_mismatch(tmp_path):
-    payload = _scenario_artifact("MANDATE_BROKEN")
+    payload = _scenario_artifact("SUBSCRIPTION_HALT")
     payload["data_provenance"] = "ARCHITECTURE_READY"
     path = tmp_path / "architecture.json"
     path.write_text(json.dumps(payload))
@@ -242,7 +230,7 @@ def test_acceptance_validator_rejects_architecture_label_and_scenario_mismatch(t
         validator.validate_file(path, require_live=False)
 
     payload["data_provenance"] = "CONTRACT_VERIFIED"
-    payload["case"]["leak_type"] = "SUBSCRIPTION_HALT"
+    payload["case"]["leak_type"] = "PAYMENT_FAILURE"
     path.write_text(json.dumps(payload))
     with pytest.raises(ValueError, match="scenario and case leak type"):
         validator.validate_file(path, require_live=False)

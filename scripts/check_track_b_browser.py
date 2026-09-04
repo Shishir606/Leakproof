@@ -42,13 +42,6 @@ def scenario_capabilities():
             capability_evidence="CONTRACT_VERIFIED",
             reason="Configured plan required.",
         ),
-        dict(
-            scenario_type="MANDATE_BROKEN",
-            primary_entity_type="subscription",
-            enabled=False,
-            capability_evidence="CONTRACT_VERIFIED",
-            reason="Provider rehearsal pending.",
-        ),
     ]
 
 
@@ -249,12 +242,11 @@ def main():
         page.on("pageerror", lambda error: errors.append(str(error)))
         page.goto(args.base_url + "/demo")
         expect(page.get_by_role("group", name="Choose one provider rehearsal")).to_be_visible()
-        expect(page.get_by_role("radio")).to_have_count(5)
-        expect(page.get_by_role("radio", name="Mandate broken", exact=True)).to_be_disabled()
+        expect(page.get_by_role("radio")).to_have_count(4)
         for available in ("Payment failure", "Checkout abandonment", "Subscription halt"):
             page.get_by_role("radio", name=available, exact=True).check()
             expect(page.get_by_role("radio", name=available, exact=True)).to_be_checked()
-        checks.append("five_capability_cards_and_all_available_scenario_controls")
+        checks.append("four_capability_cards_and_all_available_scenario_controls")
         page.get_by_label("Invoice overdue", exact=True).check()
         page.get_by_role("button", name="Create test invoice").click()
         expect(page.get_by_role("region", name="Invoice balance and status")).to_be_visible()

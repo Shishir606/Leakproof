@@ -38,11 +38,6 @@ function elapsed(seconds: number | null) {
   return `${minutes}m ${Math.round(seconds % 60)}s`;
 }
 
-function receipt(status: ProviderStatus) {
-  if (!status.request_id) return "No receipt yet";
-  return `…${status.request_id.slice(-12)}`;
-}
-
 function detail(payload: Record<string, unknown>) {
   const preferred = ["failure_class", "recommended_action", "decision", "status", "outcome", "reason"];
   for (const key of preferred) {
@@ -52,30 +47,16 @@ function detail(payload: Record<string, unknown>) {
   return "Sanitized audit event";
 }
 
-function scopeDetail(payload: Record<string, unknown>) {
-  const scope = payload.scope;
-  if (!scope || typeof scope !== "object" || Array.isArray(scope)) return "No scope proposed";
-  const entries = Object.entries(scope as Record<string, unknown>)
-    .filter(([, value]) => typeof value === "string")
-    .map(([key, value]) => `${label(key)} ${String(value)}`);
-  return entries.length ? entries.join(" · ") : "No scope proposed";
-}
-
 function EmptyLiveDemo() {
   return (
     <section className="live-empty">
       <span className="live-radar"><i /></span>
       <p className="eyebrow">No active public session</p>
       <h2>Choose one Recovery Lab scenario.</h2>
-      <p>
-        Set up a Test Mode order, invoice, or subscription, then return here to watch one
-        coherent timeline separate browser intent, provider truth, deterministic decisions,
-        Luna explanation, and verified recovery.
-      </p>
+      <p>Start a Test Mode rehearsal to watch the recovery unfold.</p>
       <Link className="live-primary-link" href="/demo">
         Open Recovery Lab <span>→</span>
       </Link>
-      <small>Test mode only · no automatic debit · Scenario Lab remains synthetic and separate</small>
     </section>
   );
 }
@@ -161,7 +142,6 @@ export function LiveDemoDashboard() {
           <span className={`live-state state-${projection.state.toLowerCase()}`}>
             <i /> {label(projection.state)}
           </span>
-          <small>Session …{projection.session_id.slice(-10)}</small>
           <Link href="/demo">{projection.subscription ? "View subscription setup" : projection.invoice ? "View invoice setup" : "Open Checkout"}</Link>
           <button type="button" onClick={startNewDemo} disabled={startingNew}>
             {startingNew ? "Creating…" : "Start a new demo"}
@@ -169,7 +149,7 @@ export function LiveDemoDashboard() {
         </div>
       </header>
 
-      <p className="live-warning">Capability evidence: {label(projection.capability_evidence)} · Session evidence: {label(projection.data_provenance)}. Setup creates the test resource; detection begins only after browser intent is reconciled or provider state is observed.{projection.setup_state === "ACTION_REQUIRED" ? " Provider setup or merchant review is required." : ""}</p>
+      {projection.setup_state === "ACTION_REQUIRED" && <p className="live-warning">Provider setup or merchant review is required.</p>}
       {!expired && (projection.subscription ? <SubscriptionStatus subscription={projection.subscription} /> : projection.invoice ? <InvoiceStatus invoice={projection.invoice} /> : <AbandonmentStatus check={projection.abandonment_check} />)}
 
       <div className="acceptance-capture">
@@ -201,17 +181,16 @@ export function LiveDemoDashboard() {
             <i /> {SOURCE_LABELS[source]}
           </span>
         ))}
-        <small>Polling every 2 seconds while active</small>
       </section>
 
-      <div className="session-metrics-heading"><p className="eyebrow">This session</p><span>Global history cannot change these values</span></div>
+      <div className="session-metrics-heading"><p className="eyebrow">This session</p></div>
       <section className="live-metrics session-only" aria-label="This session metrics">
-        <div><span>Detected amount</span><strong>{money(detectedAmount)}</strong><small>{projection.subscription ? "affected invoice only" : projection.invoice ? "original detected balance" : "server-fixed order"}</small></div>
-        <div><span>Recovered amount</span><strong>{money(projection.metrics.recovered_amount_paise)}</strong><small>verified provider truth</small></div>
-        <div><span>State</span><strong>{label(projection.state)}</strong><small>current session only</small></div>
-        <div><span>Recovery latency</span><strong>{elapsed(projection.metrics.median_recovery_time_seconds)}</strong><small>detection to verified payment</small></div>
-        <div><span>Provider failures</span><strong>{projection.metrics.provider_failures}</strong><small>this order and case</small></div>
-        <div><span>AI cost</span><strong>{money(projection.metrics.luna_cost_paise)}</strong><small>this case only</small></div>
+        <div><span>Detected amount</span><strong>{money(detectedAmount)}</strong></div>
+        <div><span>Recovered amount</span><strong>{money(projection.metrics.recovered_amount_paise)}</strong></div>
+        <div><span>State</span><strong>{label(projection.state)}</strong></div>
+        <div><span>Recovery latency</span><strong>{elapsed(projection.metrics.median_recovery_time_seconds)}</strong></div>
+        <div><span>Provider failures</span><strong>{projection.metrics.provider_failures}</strong></div>
+        <div><span>AI cost</span><strong>{money(projection.metrics.luna_cost_paise)}</strong></div>
       </section>
       <details className="environment-metrics">
         <summary>Aggregate demo environment metrics</summary>
@@ -237,22 +216,18 @@ export function LiveDemoDashboard() {
             <div>
               <span>Deterministic diagnosis</span>
               <strong>{diagnosis ? label(diagnosis.failure_class) : "Pending"}</strong>
-              <small>{diagnosis ? `${diagnosis.rule_id ?? "Tier 1"} · ${percent(diagnosis.confidence)}` : "Authority remains deterministic"}</small>
             </div>
             <div>
               <span>Gate decision</span>
               <strong>{projection.gate_verdict ? label(projection.gate_verdict) : "Pre-flight pending"}</strong>
-              <small>Applied immediately before outbound email</small>
             </div>
             <div>
               <span>AI cohort proposal</span>
               <strong>{cohortProposal ? label(String(cohortProposal.payload.recommended_action ?? "NO_ACTION")) : "No qualified cohort yet"}</strong>
-              <small>{cohortProposal ? scopeDetail(cohortProposal.payload) : "Only observed aggregate attempt data can qualify"}</small>
             </div>
             <div>
               <span>Deterministic cohort verdict</span>
               <strong>{cohortVerdict ? label(cohortVerdict.kind) : "Awaiting proposal"}</strong>
-              <small>{cohortVerdict ? detail(cohortVerdict.payload) : "Scope, thresholds, confidence and TTL are rechecked"}</small>
             </div>
           </div>
           <div className={`insight-card insight-${currentCase?.insight_status ?? "pending"}`}>
@@ -275,9 +250,9 @@ export function LiveDemoDashboard() {
               {projection.recovery_actions.map((action, index) => (
                 <div className="live-action" key={action.action_id ?? action.action_type}>
                   <span className="live-action-index">{index}</span>
-                  <div><strong>{label(action.action_type)}</strong><small>{action.action_type === "recovery_link" ? "Customer-authorized original order" : `Due ${time(action.scheduled_for)}`}</small></div>
+                  <div><strong>{label(action.action_type)}</strong></div>
                   <span className={`action-status status-${action.status}`}>{label(action.status)}</span>
-                  <div className="live-action-receipt"><span>Gate</span><strong>{action.gate_verdict ? label(action.gate_verdict) : "Pending"}</strong><small>{action.provider_receipt_id ? `Receipt …${action.provider_receipt_id.slice(-10)}` : "No provider receipt"}</small></div>
+                  <div className="live-action-receipt"><span>Gate</span><strong>{action.gate_verdict ? label(action.gate_verdict) : "Pending"}</strong></div>
                   {["recovery_link", "invoice_payment_link", "subscription_method_update"].includes(action.action_type) && projection.recovery_path && !expired && (
                     <Link className="continue-recovery" href={projection.recovery_path}>
                       {action.action_type === "subscription_method_update" ? "Repair authorization" : "Continue recovery"} <span>→</span>
@@ -301,7 +276,6 @@ export function LiveDemoDashboard() {
                 <div key={provider}>
                   <span className={`source-badge source-${provider}`}><i /> {provider === "openai" ? "Luna" : label(provider)}</span>
                   <strong>{status ? label(status.status) : "Waiting"}</strong>
-                  <small>{status ? `${label(status.operation)} · ${status.latency_ms ?? 0}ms · ${receipt(status)}` : "No call recorded"}</small>
                 </div>
               );
             })}

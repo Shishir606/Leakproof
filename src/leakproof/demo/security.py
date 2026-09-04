@@ -67,7 +67,7 @@ class RecoveryTokenClaims(ResourceContract):
             RecoveryPurpose.INVOICE_HOSTED_PAYMENT: ("invoice", {LeakType.INVOICE_OVERDUE}),
             RecoveryPurpose.SUBSCRIPTION_METHOD_UPDATE: (
                 "subscription",
-                {LeakType.SUBSCRIPTION_HALT, LeakType.MANDATE_BROKEN},
+                {LeakType.SUBSCRIPTION_HALT},
             ),
         }
         entity_type, scenarios = allowed[self.purpose]

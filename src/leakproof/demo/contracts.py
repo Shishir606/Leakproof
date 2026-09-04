@@ -320,7 +320,6 @@ class AcceptanceCaseSummary(StrictContract):
         "CHECKOUT_ABANDON",
         "INVOICE_OVERDUE",
         "SUBSCRIPTION_HALT",
-        "MANDATE_BROKEN",
     ]
     state: str
     deterministic_diagnosis_ready: bool
@@ -468,16 +467,6 @@ SCENARIO_CAPABILITIES = (
             "authorization/failure controls."
         ),
     ),
-    ScenarioCapability(
-        scenario_type=LeakType.MANDATE_BROKEN,
-        primary_entity_type="subscription",
-        enabled=False,
-        capability_evidence=DataProvenance.CONTRACT_VERIFIED,
-        reason=(
-            "Contract-tested eMandate evidence and repair reconciliation are implemented; "
-            "live launch remains disabled until the test account proves the exact evidence."
-        ),
-    ),
 )
 
 
@@ -495,7 +484,7 @@ class InvoiceSessionCreated(StrictContract):
 
 
 class SubscriptionSessionCreated(StrictContract):
-    scenario_type: Literal[LeakType.SUBSCRIPTION_HALT, LeakType.MANDATE_BROKEN]
+    scenario_type: Literal[LeakType.SUBSCRIPTION_HALT]
     primary_entity_type: Literal["subscription"] = "subscription"
     primary_entity_id: str = Field(pattern=r"^sub_[A-Za-z0-9_]+$")
     session_id: str

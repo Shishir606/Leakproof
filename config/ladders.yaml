@@ -100,12 +100,3 @@
   max_steps: 1
   steps:
     - {action: human_handoff, delay_hours: 0}
-
-- id: mandate_new_instrument
-  leak_type: MANDATE_BROKEN
-  failure_classes: [INSTRUMENT_DEAD, UNKNOWN]
-  max_steps: 3
-  steps:
-    - {action: alt_method_prompt, delay_hours: 0}
-    - {action: email_link, delay_hours: 24}
-    - {action: whatsapp_link, delay_hours: 72}

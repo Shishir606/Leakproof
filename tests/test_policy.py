@@ -114,7 +114,6 @@ def test_timing_retry_targets_the_next_indian_payday():
         (LeakType.CHECKOUT_ABANDON, "FRICTION", "B2C"),
         (LeakType.SUBSCRIPTION_HALT, "TIMING", "B2C"),
         (LeakType.INVOICE_OVERDUE, "SLOW_BUT_GOOD", "B2B"),
-        (LeakType.MANDATE_BROKEN, "INSTRUMENT_DEAD", "B2C"),
     ],
 )
 def test_every_leak_type_renders_a_bounded_positive_ev_plan(
@@ -189,22 +188,6 @@ def test_planner_explains_abandonment_when_no_action_has_positive_ev():
     assert "No guardrail-eligible action has positive EV" in plan.reason
     assert all(not evaluation.selected for evaluation in plan.evaluations)
     assert all("not positive" in evaluation.reason for evaluation in plan.evaluations)
-
-
-def test_planner_fails_closed_when_no_bounded_ladder_is_registered():
-    plan = Planner().plan(
-        PlanningCase(
-            case_id="case_unmapped",
-            leak_type=LeakType.MANDATE_BROKEN,
-            failure_class="MERCHANT_FAULT",
-            amount_at_risk_paise=1_000_000,
-        ),
-        now=NOW,
-    )
-
-    assert plan.status == "ABANDONED"
-    assert plan.ladder_id is None
-    assert "No bounded ladder is registered" in plan.reason
 
 
 def test_planner_rejects_a_ladder_that_skips_back_to_a_cheaper_action():

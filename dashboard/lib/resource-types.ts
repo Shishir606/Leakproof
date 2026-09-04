@@ -1,5 +1,5 @@
 // Shared foundation. Availability is supplied by /demo/scenarios, not by enum membership.
-export const LEAK_TYPES = ["PAYMENT_FAILURE", "CHECKOUT_ABANDON", "SUBSCRIPTION_HALT", "INVOICE_OVERDUE", "MANDATE_BROKEN"] as const;
+export const LEAK_TYPES = ["PAYMENT_FAILURE", "CHECKOUT_ABANDON", "SUBSCRIPTION_HALT", "INVOICE_OVERDUE"] as const;
 export const ENTITY_TYPES = ["order", "invoice", "subscription", "payment", "token"] as const;
 export const SETUP_STATES = ["CREATING", "READY", "ACTION_REQUIRED", "FAILED", "EXPIRED"] as const;
 export const RECOVERY_PURPOSES = ["order_checkout", "invoice_hosted_payment", "subscription_method_update"] as const;
@@ -27,7 +27,6 @@ export type RiskSignal = SignalBase & {
   amount_due_paise: number;
   baseline_paid_paise: number;
   currency: string;
-  mandate_evidence: "qualified" | null;
 };
 export type EntityStateSignal = SignalBase & {
   kind: "state";
@@ -82,7 +81,6 @@ export const SCENARIO_ENTITIES = {
   CHECKOUT_ABANDON: "order",
   INVOICE_OVERDUE: "invoice",
   SUBSCRIPTION_HALT: "subscription",
-  MANDATE_BROKEN: "subscription",
 } as const satisfies Record<LeakType, ScenarioCapability["primary_entity_type"]>;
 export function assertNever(value: never): never {
   throw new Error(`Unsupported contract variant: ${String(value)}`);
@@ -128,7 +126,7 @@ export type ResourceSessionCreated = ResourceSessionBase & ({
   primary_entity_id: string;
 } | {
   primary_entity_type: "subscription";
-  scenario_type: "SUBSCRIPTION_HALT" | "MANDATE_BROKEN";
+  scenario_type: "SUBSCRIPTION_HALT";
   primary_entity_id: string;
   authorization_url: string | null;
 });

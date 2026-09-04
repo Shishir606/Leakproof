@@ -97,17 +97,16 @@ def test_seed_generates_5000_customers_and_twelve_months_of_history(dataset):
     }
 
 
-def test_seed_covers_all_five_leak_types_and_at_least_500_at_risk_cases(dataset):
+def test_seed_covers_all_four_leak_types_and_at_least_500_at_risk_cases(dataset):
     counts = Counter(signal.leak_type for signal in dataset.signals)
 
     assert set(counts) == set(LeakType)
-    assert sum(counts.values()) == 787
+    assert sum(counts.values()) == 687
     assert counts == {
         LeakType.PAYMENT_FAILURE: 327,
         LeakType.CHECKOUT_ABANDON: 100,
         LeakType.SUBSCRIPTION_HALT: 100,
         LeakType.INVOICE_OVERDUE: 160,
-        LeakType.MANDATE_BROKEN: 100,
     }
     assert all(signal.amount_at_risk > 0 and signal.currency == "INR" for signal in dataset.signals)
 
@@ -207,13 +206,13 @@ def test_seed_persists_all_profiles_and_cases_idempotently_through_the_event_spi
         first_event = session.scalars(select(Event).order_by(Event.id)).first()
 
     assert first.customers_created == 5_000
-    assert first.cases_created == 787
-    assert first.events_appended == 1_574
+    assert first.cases_created == 687
+    assert first.events_appended == 1_374
     assert repeated.customers_created == 0
     assert repeated.customers_existing == 5_000
     assert repeated.cases_created == 0
-    assert repeated.cases_existing == 787
-    assert first_event_count == repeated_event_count == 1_574
+    assert repeated.cases_existing == 687
+    assert first_event_count == repeated_event_count == 1_374
     assert customer_count == 5_000
     assert {case.leak_type for case in cases} == set(LeakType)
     assert first_event.payload["evidence"]["simulation"]["synthetic"] is True

@@ -4,7 +4,6 @@ attribution:
     CHECKOUT_ABANDON: 7
     SUBSCRIPTION_HALT: 14
     INVOICE_OVERDUE: 21
-    MANDATE_BROKEN: 14
   credit_rule: last_touch
   amount_tolerance_pct: 1.0
 

@@ -316,7 +316,7 @@ def ready(session: SessionDep) -> dict[str, str]:
 @app.get("/capabilities", response_model=CapabilityContract)
 def capabilities() -> CapabilityContract:
     return CapabilityContract(
-        headline="one live recovery loop; five simulated expansion surfaces",
+        headline="one live recovery loop; four simulated expansion surfaces",
         capabilities=[
             CapabilityView(
                 capability="Razorpay recovery loop",
@@ -331,7 +331,6 @@ def capabilities() -> CapabilityContract:
                     "checkout abandonment",
                     "invoice overdue",
                     "subscription halt",
-                    "mandate broken",
                 ],
             ),
             CapabilityView(
@@ -1066,4 +1065,35 @@ def scoreboard_exceptions(
 def demo_scenarios():
     from leakproof.demo.contracts import SCENARIO_CAPABILITIES
 
-    return SCENARIO_CAPABILITIES
+    settings = get_settings()
+    capabilities = []
+    for capability in SCENARIO_CAPABILITIES:
+        if (
+            settings.mode == "live_demo"
+            and capability.scenario_type == LeakType.INVOICE_OVERDUE
+            and not settings.demo_invoice_customer_id
+        ):
+            capability = capability.model_copy(
+                update={
+                    "enabled": False,
+                    "reason": (
+                        "Configure a Razorpay Test Mode customer before running this rehearsal."
+                    ),
+                }
+            )
+        elif (
+            settings.mode == "live_demo"
+            and capability.scenario_type == LeakType.SUBSCRIPTION_HALT
+            and not settings.demo_subscription_plan_id
+        ):
+            capability = capability.model_copy(
+                update={
+                    "enabled": False,
+                    "reason": (
+                        "Upcoming: requires Razorpay Subscriptions access, valid Test Mode "
+                        "credentials, and a configured reusable plan."
+                    ),
+                }
+            )
+        capabilities.append(capability)
+    return capabilities

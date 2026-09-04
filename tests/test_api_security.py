@@ -101,7 +101,7 @@ def test_public_capability_and_demo_boundaries_do_not_require_operator_token(cli
 
     assert capabilities.status_code == 200
     assert capabilities.json()["headline"] == (
-        "one live recovery loop; five simulated expansion surfaces"
+        "one live recovery loop; four simulated expansion surfaces"
     )
     assert created.status_code == 201
     projection = client.get(

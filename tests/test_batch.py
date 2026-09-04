@@ -38,7 +38,6 @@ def _small_parameters():
                 update={
                     "checkout_abandonment": 2,
                     "subscription_halt": 2,
-                    "mandate_broken": 2,
                 }
             ),
         }

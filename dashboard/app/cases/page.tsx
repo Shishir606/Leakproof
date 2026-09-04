@@ -9,7 +9,7 @@ import type { CaseDetail, CaseEvent, CaseListItem } from "@/lib/types";
 export const dynamic = "force-dynamic";
 
 type Search = Record<string, string | string[] | undefined>;
-const LEAK_TYPES = ["PAYMENT_FAILURE", "INVOICE_OVERDUE", "CHECKOUT_ABANDON", "SUBSCRIPTION_HALT", "MANDATE_BROKEN"];
+const LEAK_TYPES = ["PAYMENT_FAILURE", "INVOICE_OVERDUE", "CHECKOUT_ABANDON", "SUBSCRIPTION_HALT"];
 const STATES = ["DETECTED", "DIAGNOSED", "PLANNED", "ACTING", "WAITING", "VERIFYING", "CLOSED", "SUPPRESSED", "STOPPED", "ESCALATED"];
 
 function first(value: string | string[] | undefined) {

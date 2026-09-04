@@ -94,7 +94,6 @@ def test_each_leak_type_uses_its_predeclared_attribution_window(session_factory)
         LeakType.CHECKOUT_ABANDON: 7,
         LeakType.SUBSCRIPTION_HALT: 14,
         LeakType.INVOICE_OVERDUE: 21,
-        LeakType.MANDATE_BROKEN: 14,
     }
     with session_factory() as session:
         for index, (leak_type, days) in enumerate(expected_days.items()):

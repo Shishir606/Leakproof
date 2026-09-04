@@ -94,7 +94,7 @@ claiming that invoice, subscription, mandate, and voice paths are live integrati
 Introduce explicit capability and provenance language everywhere:
 
 - `LIVE_PROVIDER_VERIFIED`: Razorpay payment failure and checkout abandonment.
-- `SIMULATED_END_TO_END`: invoice overdue, subscription halt, mandate broken, and voice/promise.
+- `SIMULATED_END_TO_END`: invoice overdue, subscription halt, and voice/promise.
 - `ARCHITECTURE_READY`: code boundary exists but a live provider is not connected.
 
 The README, dashboard navigation, Scenario Lab, API responses, demo script, and submission text must
@@ -845,4 +845,3 @@ The final product story should be:
 > policy, executes only bounded recovery actions, and measures incremental impact with explicit
 > assumptions and provenance. AI resolves ambiguity; policy controls authority; Razorpay supplies
 > payment truth.
-

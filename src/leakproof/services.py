@@ -56,8 +56,6 @@ def dedupe_key(signal: NormalizedSignal) -> str:
         return f"sh:{signal.entity_id}:{cycle}"
     if signal.leak_type == LeakType.INVOICE_OVERDUE:
         return f"io:{signal.entity_id}"
-    if signal.leak_type == LeakType.MANDATE_BROKEN:
-        return f"mb:{signal.entity_id}"
     raise ValueError(f"unsupported leak type: {signal.leak_type}")
 
 

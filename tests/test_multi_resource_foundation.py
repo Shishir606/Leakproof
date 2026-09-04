@@ -339,7 +339,6 @@ def test_scenario_selection_is_exhaustive_but_unimplemented_routes_are_disabled(
         "CHECKOUT_ABANDON": "LIVE_TELEMETRY_PROVIDER_RECONCILED",
         "INVOICE_OVERDUE": "CONTRACT_VERIFIED",
         "SUBSCRIPTION_HALT": "CONTRACT_VERIFIED",
-        "MANDATE_BROKEN": "CONTRACT_VERIFIED",
     }
     if enabled:
         demo = response.json()
@@ -347,6 +346,43 @@ def test_scenario_selection_is_exhaustive_but_unimplemented_routes_are_disabled(
     else:
         assert not payment_provider.orders
         assert response.json()["error"]["code"] == "scenario_not_implemented"
+
+
+def test_live_resource_scenarios_are_disabled_when_provider_setup_is_missing(
+    client, monkeypatch
+):
+    from leakproof.config import Settings
+
+    live_settings = Settings.model_construct(
+        mode="live_demo",
+        demo_invoice_customer_id="",
+        demo_subscription_plan_id="",
+    )
+    monkeypatch.setattr("leakproof.api.app.get_settings", lambda: live_settings)
+
+    capabilities = {
+        item["scenario_type"]: item for item in client.get("/demo/scenarios").json()
+    }
+
+    assert capabilities["PAYMENT_FAILURE"]["enabled"] is True
+    assert capabilities["CHECKOUT_ABANDON"]["enabled"] is True
+    assert capabilities["INVOICE_OVERDUE"] == {
+        "scenario_type": "INVOICE_OVERDUE",
+        "primary_entity_type": "invoice",
+        "enabled": False,
+        "capability_evidence": "CONTRACT_VERIFIED",
+        "reason": "Configure a Razorpay Test Mode customer before running this rehearsal.",
+    }
+    assert capabilities["SUBSCRIPTION_HALT"] == {
+        "scenario_type": "SUBSCRIPTION_HALT",
+        "primary_entity_type": "subscription",
+        "enabled": False,
+        "capability_evidence": "CONTRACT_VERIFIED",
+        "reason": (
+            "Upcoming: requires Razorpay Subscriptions access, valid Test Mode "
+            "credentials, and a configured reusable plan."
+        ),
+    }
 
 
 def test_selected_abandonment_can_detect_payment_failure_without_changing_setup(session_factory):
@@ -484,7 +520,7 @@ def test_v1_compatibility_v2_binding_and_wrong_purpose_rejected_before_provider(
         ("leak_type", "NOT_IMPLEMENTED"),
         ("occurred_at", NOW.replace(tzinfo=None)),
         ("amount_due_paise", -1),
-        ("leak_type", "MANDATE_BROKEN"),
+        ("leak_type", "REMOVED_TYPE"),
     ],
 )
 def test_signal_contract_rejects_invalid_or_ambiguous_identity(field, value):
@@ -608,24 +644,8 @@ def test_multi_resource_sessions_share_invoice_owner_and_keep_subscription_setup
             assert projection.case.case_id == case.id
             assert not projection.recovery_url_available
             assert projection.capability_evidence == "ARCHITECTURE_READY"
-        sub = DemoSession(
-            id="demo_subscription",
-            merchant_id=SCOPE.merchant_id,
-            customer_id=case.customer_id,
-            scenario_type="MANDATE_BROKEN",
-            primary_entity_type="subscription",
-            primary_entity_id="sub_setup",
-            amount_paise=0,
-            currency="INR",
-            setup_state="ACTION_REQUIRED",
-            state="CREATED",
-            expires_at=NOW + timedelta(hours=1),
-        )
-        session.add(sub)
-        session.flush()
-        assert case_for_session(session, sub) is None
         adapter = TypeAdapter(ResourceSessionCreated)
-        for resource_session in (demo, sub):
+        for resource_session in (demo,):
             value = adapter.validate_python(
                 {
                     "primary_entity_type": resource_session.primary_entity_type,
@@ -647,7 +667,7 @@ def test_multi_resource_sessions_share_invoice_owner_and_keep_subscription_setup
     "purpose,entity,scenario",
     [
         ("invoice_hosted_payment", INVOICE, "INVOICE_OVERDUE"),
-        ("subscription_method_update", SUBSCRIPTION, "MANDATE_BROKEN"),
+        ("subscription_method_update", SUBSCRIPTION, "SUBSCRIPTION_HALT"),
     ],
 )
 def test_payment_callback_rejects_other_token_purposes_before_fetch(

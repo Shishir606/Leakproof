@@ -119,29 +119,6 @@ class RiskSignal(SignalBase):
     amount_due_paise: int = Field(ge=0)
     baseline_paid_paise: int = Field(default=0, ge=0)
     currency: str = Field(pattern=r"^[A-Z]{3}$")
-    mandate_evidence: Literal["qualified"] | None = None
-
-    @model_validator(mode="after")
-    def qualified_mandate(self):
-        if self.leak_type == LeakType.MANDATE_BROKEN and self.mandate_evidence != "qualified":
-            raise ValueError("mandate classification requires qualified provider evidence")
-        return self
-
-
-class MandateInvalidEvidence(ResourceContract):
-    """Narrow contract for the only qualified evidence implemented by Track D.
-
-    This deliberately models an eMandate subsequent-payment failure, rather than
-    accepting provider descriptions or subscription lifecycle state as evidence.
-    """
-
-    evidence_type: Literal["emandate_subsequent_payment_failure"]
-    payment_id: str = Field(pattern=r"^pay_[A-Za-z0-9_]+$")
-    subscription_id: str = Field(pattern=r"^sub_[A-Za-z0-9_]+$")
-    invoice_id: str = Field(pattern=r"^inv_[A-Za-z0-9_]+$")
-    method: Literal["emandate"]
-    recurring: Literal[True]
-    error_reason: Literal["mandate_not_active"]
 
 
 class EntityStateSignal(SignalBase):
@@ -200,5 +177,4 @@ LEAK_PRECEDENCE = {
     LeakType.PAYMENT_FAILURE: 1,
     LeakType.INVOICE_OVERDUE: 2,
     LeakType.SUBSCRIPTION_HALT: 3,
-    LeakType.MANDATE_BROKEN: 4,
 }

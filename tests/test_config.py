@@ -26,7 +26,6 @@ def test_all_foundation_configuration_is_typed_and_loads():
         "CHECKOUT_ABANDON",
         "SUBSCRIPTION_HALT",
         "INVOICE_OVERDUE",
-        "MANDATE_BROKEN",
     }
     measurement = get_measurement_config()
     assert measurement.holdout.fraction == 0.10

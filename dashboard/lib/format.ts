@@ -3,7 +3,6 @@ const LABELS: Record<string, string> = {
   CHECKOUT_ABANDON: "Checkout abandon",
   SUBSCRIPTION_HALT: "Subscription halt",
   INVOICE_OVERDUE: "Invoice overdue",
-  MANDATE_BROKEN: "Mandate broken",
 };
 
 export function money(paise: number, compact = false) {

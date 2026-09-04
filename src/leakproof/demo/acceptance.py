@@ -541,7 +541,6 @@ def _subscription_acceptance(session, demo, projection, exported_at):
     subscription = projection.subscription
     reconciliations = [e for e in events if e.kind == "SUBSCRIPTION_RECONCILED"]
     statuses = [e.payload.get("subscription_status") for e in reconciliations]
-    mandate = bool(case and case.leak_type == "MANDATE_BROKEN")
     checks = []
 
     def check(name, passed, detail, severity="blocking"):
@@ -552,48 +551,14 @@ def _subscription_acceptance(session, demo, projection, exported_at):
     check(
         "case_detected", case and obligation, "One exact subscription-invoice cycle owns the case."
     )
-    if mandate:
-        repair_events = [
-            event
-            for event in events
-            if event.kind == "ENTITY_STATE"
-            and event.payload.get("state") == "authorization_repaired"
-        ]
-        monetary_events = [
-            event
-            for event in events
-            if event.kind in {"SETTLEMENT_OBSERVED", "VERIFYING", "CLOSED"}
-        ]
-        check(
-            "qualified_mandate_evidence",
-            parent
-            and parent.safe_metadata.get("mandate_broken") is True
-            and parent.safe_metadata.get("mandate_evidence_type")
-            == "emandate_subsequent_payment_failure",
-            "The classification uses the method-scoped recurring eMandate failure contract.",
-        )
-        check(
-            "exact_invoice_owned",
-            obligation and case and obligation.case_id == case.case_id,
-            "The broken authorization remains attached to one exact invoice obligation.",
-        )
-        check(
-            "authorization_repair_separate_from_revenue",
-            repair_events
-            and monetary_events
-            and max(event.seq for event in repair_events)
-            < min(event.seq for event in monetary_events),
-            "Authorization repair is audited as non-monetary state before captured revenue.",
-        )
-    else:
-        check(
-            "pending_to_halted_same_case",
-            "pending" in statuses
-            and "halted" in statuses
-            and obligation
-            and obligation.case_id == case.case_id,
-            "Pending and halted observations escalated one cycle case.",
-        )
+    check(
+        "pending_to_halted_same_case",
+        "pending" in statuses
+        and "halted" in statuses
+        and obligation
+        and obligation.case_id == case.case_id,
+        "Pending and halted observations escalated one cycle case.",
+    )
     check(
         "razorpay_owns_retries",
         subscription and subscription.retry_owner == "razorpay",
@@ -681,7 +646,7 @@ def _subscription_acceptance(session, demo, projection, exported_at):
         passed=all(c.passed for c in checks if c.severity == "blocking"),
         subscription=subscription,
         session=AcceptanceSessionSummary(
-            scenario_type="MANDATE_BROKEN" if mandate else demo.scenario_type,
+            scenario_type=demo.scenario_type,
             state=projection.state,
             amount_paise=demo.amount_paise,
             currency=demo.currency,

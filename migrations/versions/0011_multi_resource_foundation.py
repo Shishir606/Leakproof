@@ -80,7 +80,7 @@ def upgrade() -> None:
             batch.create_check_constraint(
                 "ck_demo_scenario",
                 "scenario_type IN ('PAYMENT_FAILURE','CHECKOUT_ABANDON','INVOICE_OVERDUE',"
-                "'SUBSCRIPTION_HALT','MANDATE_BROKEN')",
+                "'SUBSCRIPTION_HALT')",
             )
             batch.create_check_constraint(
                 "ck_demo_order_compatibility",

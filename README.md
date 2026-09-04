@@ -5,7 +5,7 @@
 This repository contains the August 25 foundation through the September 4 reproducible full-batch slice.
 A FastAPI receiver verifies Razorpay HMAC signatures, commits each raw webhook
 to a durable Postgres inbox, deduplicates by provider event ID, and only then asks a Celery worker
-to normalize it. A fixed-seed simulator sends all five revenue-leak types through that same case
+to normalize it. A fixed-seed simulator sends all four revenue-leak types through that same case
 and append-only event spine. PostgreSQL rejects updates and deletes against the event timeline,
 worker redelivery cannot append duplicate events or repeat an actuator call, and repeating a
 simulator seed cannot duplicate cases. A ten-minute aggregate cohort scan uses durable,
@@ -18,8 +18,8 @@ These API and dashboard labels are not interchangeable.
 
 | Label | What is shipped | What it does not claim |
 |---|---|---|
-| `LIVE_PROVIDER_VERIFIED` | One Razorpay test-mode recovery loop covering payment failure and checkout abandonment, closed only by a signed Checkout result plus captured-payment API verification or a signed success webhook | Live invoice, subscription, mandate, voice, or autonomous money movement |
-| `SIMULATED_END_TO_END` | Scenario Lab coverage for payment failure, checkout abandonment, invoice overdue, subscription halt, and mandate broken | Realized merchant revenue or provider-verified recovery |
+| `LIVE_PROVIDER_VERIFIED` | One Razorpay test-mode recovery loop covering payment failure and checkout abandonment, closed only by a signed Checkout result plus captured-payment API verification or a signed success webhook | Live invoice, subscription, voice, or autonomous money movement |
+| `SIMULATED_END_TO_END` | Scenario Lab coverage for payment failure, checkout abandonment, invoice overdue, and subscription halt | Realized merchant revenue or provider-verified recovery |
 | `ARCHITECTURE_READY` | Bounded voice/promise and provider-adapter boundaries without a connected live provider | A live customer-contact integration |
 
 `GET /capabilities` publishes the same safe matrix. Scenario Lab rejects anything other than
@@ -33,11 +33,11 @@ These API and dashboard labels are not interchangeable.
   contribution margin, costs, exclusions, seeds, and uncertainty intervals.
 - The operator bearer credential is buildathon containment. Production requires merchant identity,
   OAuth/RBAC, rotation, and an authenticated operator surface.
-- Invoice, subscription, mandate, voice, Resend recipient delivery, and additional provider adapters
+- Invoice, subscription, voice, Resend recipient delivery, and additional provider adapters
   remain simulated, preview-only, or architecture-ready exactly as labelled above.
 
-The post-release plan for turning checkout abandonment, invoice overdue, subscription halt, and
-broken mandates into evidence-gated Razorpay test-mode demos is documented in
+The post-release plan for turning checkout abandonment, invoice overdue, and subscription halt
+into evidence-gated Razorpay test-mode demos is documented in
 [`MULTI_SURFACE_RECOVERY_IMPLEMENTATION_PLAN.md`](MULTI_SURFACE_RECOVERY_IMPLEMENTATION_PLAN.md).
 
 ```text
@@ -59,7 +59,7 @@ FastAPI ──commit──> Postgres webhook inbox                    │
 
 ## September 4 headline scoreboard
 
-The committed seed-42 simulation now runs all 787 cases through diagnosis, holdout assignment,
+The committed seed-42 simulation now runs all 687 cases through diagnosis, holdout assignment,
 bounded planning, pre-flight gating, deterministic actuators, outcome verification, and the
 exception ledger. These are synthetic measurements from the assumptions in
 `simulator/params.yaml`, not production revenue claims.
@@ -223,7 +223,7 @@ when one is produced.
 `make seed` reads every simulator assumption from `simulator/params.yaml`, uses committed seed
 `42`, creates a clearly synthetic merchant in PostgreSQL, and writes a reproducible dataset to
 `artifacts/simulator/seed-42.json`. Running the command again reuses the same 5,000 customer
-profiles and 787 cases without appending duplicate events.
+profiles and 687 cases without appending duplicate events.
 
 The default run produces:
 
@@ -233,12 +233,11 @@ The default run produces:
 | Months of customer history | 12 |
 | Historical orders | 84,020 |
 | B2B invoice customers | 400 |
-| At-risk cases | 787 |
+| At-risk cases | 687 |
 | Payment failures | 327 |
 | Overdue invoices | 160 |
 | Abandoned checkouts | 100 |
 | Halted subscriptions | 100 |
-| Broken mandates | 100 |
 | Ground-truth organic recoveries | 236 |
 
 The five injected scenarios are a 40-minute HDFC/netbanking issuer outage with 47 failures, a
@@ -568,7 +567,7 @@ The tests demonstrate:
 - all YAML configuration loads into typed models;
 - the simulator creates 5,000 customer profiles with 12 months of reproducible history;
 - every leak type and every required incident scenario is present;
-- organic recoveries are represented for all five leak types;
+- organic recoveries are represented for all four leak types;
 - reseeding does not duplicate customers, cases, or append-only events;
 - every leak type renders a bounded positive-EV plan or an explained `ABANDONED` result;
 - fixed-prior decisions, retry timing, and cheapest-first ladder constraints are deterministic;
