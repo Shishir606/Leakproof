@@ -155,6 +155,10 @@ class RazorpayPaymentProvider:
         payload = self._request_json(
             "POST",
             "/v1/orders",
+            # Razorpay Orders do not expose a request idempotency header. A timeout may
+            # mean the provider committed the order but the response was lost, so an
+            # automatic retry could create a second payable resource.
+            _attempt_limit=1,
             json={
                 "amount": request.amount_paise,
                 "currency": request.currency,

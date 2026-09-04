@@ -14,6 +14,47 @@ from urllib.parse import urlparse
 
 from playwright.sync_api import expect, sync_playwright
 
+
+def scenario_capabilities():
+    return [
+        dict(
+            scenario_type="PAYMENT_FAILURE",
+            primary_entity_type="order",
+            enabled=True,
+            capability_evidence="LIVE_PROVIDER_VERIFIED",
+            reason=None,
+        ),
+        dict(
+            scenario_type="CHECKOUT_ABANDON",
+            primary_entity_type="order",
+            enabled=True,
+            capability_evidence="LIVE_TELEMETRY_PROVIDER_RECONCILED",
+            reason=None,
+        ),
+        dict(
+            scenario_type="INVOICE_OVERDUE",
+            primary_entity_type="invoice",
+            enabled=True,
+            capability_evidence="CONTRACT_VERIFIED",
+            reason="Human hosted payment required.",
+        ),
+        dict(
+            scenario_type="SUBSCRIPTION_HALT",
+            primary_entity_type="subscription",
+            enabled=True,
+            capability_evidence="CONTRACT_VERIFIED",
+            reason="Configured plan required.",
+        ),
+        dict(
+            scenario_type="MANDATE_BROKEN",
+            primary_entity_type="subscription",
+            enabled=False,
+            capability_evidence="CONTRACT_VERIFIED",
+            reason="Provider rehearsal pending.",
+        ),
+    ]
+
+
 SDK = """
 window.Razorpay = class {
   constructor(options) { this.options = options; this.events = {}; }
@@ -177,7 +218,9 @@ def main() -> None:
         if not path.startswith("/api/"):
             route.continue_()
             return
-        if path == "/api/demo/sessions" and request.method == "POST":
+        if path == "/api/demo/scenarios":
+            payload = scenario_capabilities()
+        elif path == "/api/demo/sessions" and request.method == "POST":
             assert request.post_data_json["scenario_type"] == session["scenario_type"]
             state["creates"] += 1
             payload = session

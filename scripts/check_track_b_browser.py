@@ -12,6 +12,46 @@ from check_track_a_browser import WATERMARK
 from playwright.sync_api import expect, sync_playwright
 
 
+def scenario_capabilities():
+    return [
+        dict(
+            scenario_type="PAYMENT_FAILURE",
+            primary_entity_type="order",
+            enabled=True,
+            capability_evidence="LIVE_PROVIDER_VERIFIED",
+            reason=None,
+        ),
+        dict(
+            scenario_type="CHECKOUT_ABANDON",
+            primary_entity_type="order",
+            enabled=True,
+            capability_evidence="LIVE_TELEMETRY_PROVIDER_RECONCILED",
+            reason=None,
+        ),
+        dict(
+            scenario_type="INVOICE_OVERDUE",
+            primary_entity_type="invoice",
+            enabled=True,
+            capability_evidence="CONTRACT_VERIFIED",
+            reason="Human hosted payment required.",
+        ),
+        dict(
+            scenario_type="SUBSCRIPTION_HALT",
+            primary_entity_type="subscription",
+            enabled=True,
+            capability_evidence="CONTRACT_VERIFIED",
+            reason="Configured plan required.",
+        ),
+        dict(
+            scenario_type="MANDATE_BROKEN",
+            primary_entity_type="subscription",
+            enabled=False,
+            capability_evidence="CONTRACT_VERIFIED",
+            reason="Provider rehearsal pending.",
+        ),
+    ]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://127.0.0.1:3101")
@@ -148,6 +188,8 @@ def main():
         def reply(body, status=200):
             route.fulfill(status=status, content_type="application/json", body=json.dumps(body))
 
+        if path == "/api/demo/scenarios":
+            return reply(scenario_capabilities())
         if path == "/api/demo/sessions" and route.request.method == "POST":
             assert route.request.post_data_json["scenario_type"] == "INVOICE_OVERDUE"
             state["creates"] += 1
@@ -206,7 +248,14 @@ def main():
         page = context.new_page()
         page.on("pageerror", lambda error: errors.append(str(error)))
         page.goto(args.base_url + "/demo")
-        page.get_by_label("Overdue invoice", exact=True).check()
+        expect(page.get_by_role("group", name="Choose one provider rehearsal")).to_be_visible()
+        expect(page.get_by_role("radio")).to_have_count(5)
+        expect(page.get_by_role("radio", name="Mandate broken", exact=True)).to_be_disabled()
+        for available in ("Payment failure", "Checkout abandonment", "Subscription halt"):
+            page.get_by_role("radio", name=available, exact=True).check()
+            expect(page.get_by_role("radio", name=available, exact=True)).to_be_checked()
+        checks.append("five_capability_cards_and_all_available_scenario_controls")
+        page.get_by_label("Invoice overdue", exact=True).check()
         page.get_by_role("button", name="Create test invoice").click()
         expect(page.get_by_role("region", name="Invoice balance and status")).to_be_visible()
         expect(page.get_by_text("Not overdue", exact=False)).to_be_visible()

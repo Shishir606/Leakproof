@@ -7,6 +7,7 @@ import hmac
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -23,6 +24,39 @@ class InvalidWebhookSignature(ValueError):
 class IngestedWebhook:
     id: int
     duplicate: bool
+
+
+_SENSITIVE_PROVIDER_KEYS = {
+    "address",
+    "billing_address",
+    "contact",
+    "customer_details",
+    "email",
+    "name",
+    "notes",
+    "phone",
+    "shipping_address",
+}
+
+
+def redact_provider_payload(value: Any) -> Any:
+    """Drop customer-entered PII before the durable webhook inbox boundary."""
+    if isinstance(value, dict):
+        return {
+            key: redact_provider_payload(item)
+            for key, item in value.items()
+            if key.casefold() not in _SENSITIVE_PROVIDER_KEYS
+            and (
+                key.casefold() == "email_id"
+                or not any(
+                    fragment in key.casefold()
+                    for fragment in ("email", "phone", "address", "contact", "name")
+                )
+            )
+        }
+    if isinstance(value, list):
+        return [redact_provider_payload(item) for item in value]
+    return value
 
 
 def verify_razorpay_signature(body: bytes, signature: str, secret: str) -> None:
@@ -107,7 +141,7 @@ def persist_webhook(
         provider=provider,
         provider_event_key=key,
         event_type=str(payload.get("event", "unknown")),
-        payload=payload,
+        payload=redact_provider_payload(payload),
         signature_verified=True,
     )
     session.add(event)

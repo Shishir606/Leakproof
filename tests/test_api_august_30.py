@@ -15,7 +15,7 @@ from leakproof.demo import (
     DemoSessionState,
     live_case_dedupe_key,
 )
-from leakproof.demo.rate_limit import InMemoryRateLimiter
+from leakproof.demo.rate_limit import InMemoryRateLimiter, RateLimitUnavailable
 from leakproof.demo.security import decrypt_recipient
 from leakproof.demo.service import (
     DemoRateLimitExceeded,
@@ -143,18 +143,13 @@ def test_razorpay_order_adapter_uses_basic_auth_and_fixed_server_payload():
     assert order.request_id == "req_rzp_1"
 
 
-def test_razorpay_adapter_retries_temporary_failure_and_rejects_mismatch():
+def test_razorpay_adapter_never_retries_ambiguous_order_creation():
     calls = 0
 
-    def handler(_request: httpx2.Request) -> httpx2.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         nonlocal calls
         calls += 1
-        if calls == 1:
-            return httpx2.Response(503)
-        return httpx2.Response(
-            200,
-            json={"id": "order_wrong", "amount": 1, "currency": "INR", "status": "created"},
-        )
+        raise httpx2.ReadTimeout("response lost after provider write", request=request)
 
     client = httpx2.Client(
         base_url="https://api.razorpay.com", transport=httpx2.MockTransport(handler)
@@ -162,11 +157,83 @@ def test_razorpay_adapter_retries_temporary_failure_and_rejects_mismatch():
     provider = RazorpayPaymentProvider(
         "rzp_test_key", "secret", client=client, sleep=lambda _: None
     )
-    with pytest.raises(ProviderError, match="amount or currency") as raised:
+    with pytest.raises(ProviderError, match="request failed") as raised:
         provider.create_order(CreateOrderRequest(50_000, "INR", "receipt", "idempotency", {}))
 
-    assert calls == 2
-    assert raised.value.error_class == "response_mismatch"
+    assert calls == 1
+    assert raised.value.error_class == "transport_error"
+
+
+def test_razorpay_adapter_retries_reads_and_rejects_order_response_mismatch():
+    read_calls = 0
+
+    def read_handler(_request: httpx2.Request) -> httpx2.Response:
+        nonlocal read_calls
+        read_calls += 1
+        if read_calls == 1:
+            return httpx2.Response(503)
+        return httpx2.Response(
+            200,
+            json={
+                "id": "pay_retry",
+                "order_id": "order_retry",
+                "amount": 50_000,
+                "currency": "INR",
+                "status": "captured",
+            },
+        )
+
+    provider = RazorpayPaymentProvider(
+        "rzp_test_key",
+        "secret",
+        client=httpx2.Client(
+            base_url="https://api.razorpay.com", transport=httpx2.MockTransport(read_handler)
+        ),
+        sleep=lambda _: None,
+    )
+    assert provider.fetch_payment("pay_retry").status == "captured"
+    assert read_calls == 2
+
+    mismatch = RazorpayPaymentProvider(
+        "rzp_test_key",
+        "secret",
+        client=httpx2.Client(
+            base_url="https://api.razorpay.com",
+            transport=httpx2.MockTransport(
+                lambda _: httpx2.Response(
+                    200,
+                    json={
+                        "id": "order_wrong",
+                        "amount": 1,
+                        "currency": "INR",
+                        "status": "created",
+                    },
+                )
+            ),
+        ),
+    )
+    with pytest.raises(ProviderError, match="amount or currency"):
+        mismatch.create_order(CreateOrderRequest(50_000, "INR", "receipt", "idempotency", {}))
+
+
+def test_unavailable_rate_limit_store_fails_closed_before_provider_write(session_factory):
+    class UnavailableLimiter:
+        def allow(self, *_args, **_kwargs):
+            raise RateLimitUnavailable("rate-limit store is unavailable")
+
+    provider = FakePaymentProvider()
+    with session_factory() as session:
+        with pytest.raises(RateLimitUnavailable):
+            create_demo_session(
+                session,
+                DemoSessionCreateRequest(),
+                client_ip="203.0.113.11",
+                provider=provider,
+                limiter=UnavailableLimiter(),
+                settings=demo_settings(),
+                now=NOW,
+            )
+    assert provider.create_calls == []
 
 
 def test_session_creation_persists_public_order_without_storing_plain_recipient(session_factory):

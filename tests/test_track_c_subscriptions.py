@@ -397,7 +397,9 @@ def test_provider_model_and_email_failures_degrade_without_revenue_or_extra_debi
         assert session.scalar(select(func.coalesce(func.sum(Settlement.credited_paise), 0))) == 0
 
 
-def test_subscription_acceptance_capture_separates_service_and_invoice_recovery(session_factory):
+def test_subscription_acceptance_capture_separates_service_and_invoice_recovery(
+    session_factory, request
+):
     provider = FakePaymentProvider()
     with session_factory() as session:
         created, demo, config = setup_subscription(session, provider)
@@ -432,12 +434,21 @@ def test_subscription_acceptance_capture_separates_service_and_invoice_recovery(
             now=NOW + timedelta(minutes=5),
         )
         checks = {item.check: item.passed for item in artifact.checks}
-        assert artifact.passed
+        assert artifact.passed, [(item.check, item.passed) for item in artifact.checks]
         assert artifact.subscription.retry_owner == "razorpay"
         assert checks["pending_to_halted_same_case"]
         assert checks["exact_invoice_settled"]
         assert checks["recovered_revenue_is_captured"]
         assert checks["no_app_owned_debit"]
+        assert checks["captured_payment_globally_unique"]
+        output = request.config.getoption("--acceptance-output-dir")
+        if output:
+            from pathlib import Path
+
+            Path(output).mkdir(parents=True, exist_ok=True)
+            Path(output, "subscription-halt.json").write_text(
+                artifact.model_dump_json() + "\n"
+            )
 
 
 @pytest.mark.parametrize(
@@ -566,6 +577,91 @@ def test_duplicate_authorization_repair_is_non_monetary_then_verified_payment_re
         session.refresh(case)
         assert case.outcome == "RECOVERED"
         assert subscription_view(session, demo, NOW)["recovered_paise"] == cycle.amount_paise
+
+
+def test_mandate_contract_acceptance_keeps_repair_and_captured_revenue_separate(
+    session_factory, request
+):
+    provider = FakePaymentProvider()
+    with session_factory() as session:
+        config = settings(subscription_method_allowlist="emandate")
+        created, demo, config = setup_subscription(session, provider, config=config)
+        cycle = add_cycle(provider, demo)
+        set_subscription(provider, demo, "halted", "emandate")
+        case_id = process_subscription_payload(
+            session,
+            provider,
+            config,
+            mandate_failure_payload(demo, cycle),
+            "evt_mandate_contract_failure",
+            NOW + timedelta(minutes=1),
+        )
+        diagnose_case(session, case_id)
+        token = issue_demo_recovery_token(
+            session, demo.id, settings=config, now=NOW + timedelta(minutes=1)
+        )
+        get_recovery_bootstrap(
+            session,
+            token,
+            provider=provider,
+            settings=config,
+            now=NOW + timedelta(minutes=1),
+        )
+
+        set_subscription(provider, demo, "active", "emandate")
+        activated = {
+            "event": "subscription.activated",
+            "payload": {
+                "subscription": {"entity": {"id": demo.primary_entity_id}},
+                "invoice": {
+                    "entity": {"id": cycle.id, "subscription_id": demo.primary_entity_id}
+                },
+            },
+        }
+        process_subscription_payload(
+            session,
+            provider,
+            config,
+            activated,
+            "evt_mandate_contract_repair",
+            NOW + timedelta(minutes=2),
+        )
+        capture_cycle(
+            provider,
+            cycle,
+            payment_id="pay_mandate_contract",
+            occurred=NOW + timedelta(minutes=3),
+        )
+        reconcile_subscription(
+            session,
+            demo.id,
+            provider=provider,
+            settings=config,
+            now=NOW + timedelta(minutes=3),
+        )
+        artifact = build_demo_acceptance_export(
+            session,
+            demo.id,
+            session_token=created.session_token,
+            settings=config,
+            now=NOW + timedelta(minutes=4),
+        )
+        checks = {item.check: item.passed for item in artifact.checks}
+        assert artifact.passed, [(item.check, item.passed) for item in artifact.checks]
+        assert artifact.session.scenario_type == "MANDATE_BROKEN"
+        assert artifact.case.leak_type == "MANDATE_BROKEN"
+        assert artifact.data_provenance == "SIMULATED_END_TO_END"
+        assert checks["qualified_mandate_evidence"]
+        assert checks["authorization_repair_separate_from_revenue"]
+        assert checks["captured_payment_globally_unique"]
+        output = request.config.getoption("--acceptance-output-dir")
+        if output:
+            from pathlib import Path
+
+            Path(output).mkdir(parents=True, exist_ok=True)
+            Path(output, "mandate-broken-contract.json").write_text(
+                artifact.model_dump_json() + "\n"
+            )
 
 
 def test_mandate_repair_respects_customer_opt_out_and_intentional_cancellation(session_factory):

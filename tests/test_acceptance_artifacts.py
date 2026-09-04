@@ -78,6 +78,7 @@ def test_acceptance_validator_accepts_subscription_cycle_evidence(tmp_path):
         "no_app_owned_debit",
         "method_update_rechecked",
         "cycle_payment_ledger_unique",
+        "captured_payment_globally_unique",
         "audit_projection_replay_matches",
         "no_blocking_provider_failure",
         "intentional_states_have_no_cta",
@@ -164,3 +165,84 @@ def test_telemetry_reconciled_capture_requires_abandonment_evidence(tmp_path):
     path.write_text(json.dumps(payload))
     with pytest.raises(ValueError, match="not live provider evidence"):
         validator.validate_file(path, require_live=True)
+
+
+def _scenario_artifact(scenario: str) -> dict:
+    payload = _artifact()
+    payload["session"]["scenario_type"] = scenario
+    payload["case"]["leak_type"] = scenario
+    required = validator.REQUIRED_CHECKS.copy()
+    if scenario == "CHECKOUT_ABANDON":
+        required |= validator.ABANDONMENT_CHECKS
+    elif scenario == "INVOICE_OVERDUE":
+        required = validator.INVOICE_CHECKS | {
+            "invoice_partial_payment_kept_open",
+            "original_invoice_opened",
+            "same_case_closed",
+            "session_recovered_amount_correct",
+            "provider_verified_payment",
+        }
+    elif scenario == "SUBSCRIPTION_HALT":
+        required = validator.SUBSCRIPTION_CHECKS | {
+            "exact_invoice_settled",
+            "same_case_closed",
+            "recovered_revenue_is_captured",
+        }
+    elif scenario == "MANDATE_BROKEN":
+        required = validator.MANDATE_CHECKS | {
+            "exact_invoice_settled",
+            "same_case_closed",
+            "recovered_revenue_is_captured",
+        }
+        payload["data_provenance"] = "CONTRACT_VERIFIED"
+    payload["checks"] = [
+        {
+            "check": name,
+            "passed": True,
+            "severity": "blocking",
+            "detail": "Sanitized scenario evidence passed.",
+        }
+        for name in sorted(required)
+    ]
+    return payload
+
+
+def test_acceptance_validator_requires_all_five_scenarios_and_separates_contract_evidence(
+    tmp_path, monkeypatch, capsys
+):
+    for scenario in (
+        "PAYMENT_FAILURE",
+        "CHECKOUT_ABANDON",
+        "INVOICE_OVERDUE",
+        "SUBSCRIPTION_HALT",
+        "MANDATE_BROKEN",
+    ):
+        (tmp_path / f"{scenario.casefold()}.json").write_text(
+            json.dumps(_scenario_artifact(scenario))
+        )
+
+    monkeypatch.setattr(
+        "sys.argv",
+        ["validator", "--directory", str(tmp_path), "--require-all-scenarios"],
+    )
+    assert validator.main() == 0
+    assert "provider=4, contract=1, simulated=0" in capsys.readouterr().out
+
+    mandate_path = tmp_path / "mandate_broken.json"
+    with pytest.raises(ValueError, match="not live provider evidence"):
+        validator.validate_file(mandate_path, require_live=True)
+
+
+def test_acceptance_validator_rejects_architecture_label_and_scenario_mismatch(tmp_path):
+    payload = _scenario_artifact("MANDATE_BROKEN")
+    payload["data_provenance"] = "ARCHITECTURE_READY"
+    path = tmp_path / "architecture.json"
+    path.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="architecture readiness"):
+        validator.validate_file(path, require_live=False)
+
+    payload["data_provenance"] = "CONTRACT_VERIFIED"
+    payload["case"]["leak_type"] = "SUBSCRIPTION_HALT"
+    path.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="scenario and case leak type"):
+        validator.validate_file(path, require_live=False)

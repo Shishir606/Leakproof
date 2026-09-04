@@ -392,3 +392,151 @@ def test_track_b_concurrent_reconciliation_and_email_share_one_invoice(migrated_
             == 2
         )
         assert not email.calls
+
+
+def test_concurrent_overlapping_webhooks_count_one_captured_payment(migrated_postgres):
+    from datetime import timedelta
+
+    from test_api_september_4 import NOW
+    from test_track_b_invoices import pay, reconcile, setup_invoice
+
+    from leakproof.models.db import DemoSession, WebhookEvent
+    from leakproof.providers.fakes import FakePaymentProvider
+    from leakproof.sensors.processor import process_stored_webhook
+    from leakproof.sensors.webhooks import persist_webhook
+
+    engine, _ = migrated_postgres
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    provider = FakePaymentProvider()
+    with factory() as session:
+        _, demo, config = setup_invoice(session, provider)
+        case = reconcile(session, demo, provider, config)
+        case_id, demo_id = case.id, demo.id
+        pay(provider, demo, 20_000, payment_id="pay_webhook_overlap")
+        invoice = provider.invoices[demo.primary_entity_id]
+        event_ids = []
+        for index, event_type in enumerate(
+            ("invoice.partially_paid", "payment.captured", "order.paid", "subscription.charged")
+        ):
+            stored = persist_webhook(
+                session,
+                merchant_id=demo.merchant_id,
+                header_event_id=f"evt_concurrent_overlap_{index}",
+                payload={
+                    "event": event_type,
+                    "created_at": int(NOW.timestamp()),
+                    "payload": {
+                        "invoice": {
+                            "entity": {
+                                "id": invoice.id,
+                                "subscription_id": invoice.subscription_id,
+                            }
+                        },
+                        "payment": {
+                            "entity": {
+                                "id": "pay_webhook_overlap",
+                                "order_id": invoice.order_id,
+                                "invoice_id": invoice.id,
+                            }
+                        },
+                    },
+                },
+            )
+            event_ids.append(stored.id)
+
+    def deliver(event_id):
+        with factory() as session:
+            return process_stored_webhook(
+                session,
+                event_id,
+                provider=provider,
+                settings=config,
+                now=NOW + timedelta(seconds=90),
+            )
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        assert set(pool.map(deliver, event_ids)) == {case_id}
+    with factory() as session:
+        demo = session.get(DemoSession, demo_id)
+        obligation = session.scalar(
+            select(ProviderObligation).where(ProviderObligation.case_id == case_id)
+        )
+        assert obligation.recovered_paise == 20_000
+        assert obligation.outstanding_paise == 30_000
+        assert (
+            session.scalar(
+                select(func.count(Settlement.id)).where(
+                    Settlement.payment_id == "pay_webhook_overlap"
+                )
+            )
+            == 1
+        )
+        assert session.scalar(
+            select(func.count(WebhookEvent.id)).where(WebhookEvent.processed_at.is_not(None))
+        ) == len(event_ids)
+        assert demo.state == "AT_RISK"
+
+
+def test_concurrent_email_actions_cannot_exceed_account_quota(migrated_postgres):
+    from datetime import timedelta
+
+    from test_api_september_4 import NOW, settings
+    from test_track_b_invoices import reconcile, setup_invoice
+
+    from leakproof.demo.email import execute_demo_recovery_email, schedule_demo_recovery_email
+    from leakproof.diagnosis import diagnose_case
+    from leakproof.models.db import EmailDelivery
+    from leakproof.providers.fakes import FakeEmailProvider, FakePaymentProvider
+
+    engine, _ = migrated_postgres
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    payment_provider, email_provider = FakePaymentProvider(), FakeEmailProvider()
+    config = settings().model_copy(
+        update={
+            "outbound_email_enabled": True,
+            "resend_api_key": "re_contract",
+            "resend_from_email": "demo@example.com",
+            "demo_email_allowlist": "reviewer@example.com",
+            "resend_daily_limit": 1,
+            "resend_monthly_limit": 1,
+        }
+    )
+    action_ids = []
+    for _ in range(2):
+        with factory() as session:
+            _, demo, _ = setup_invoice(
+                session,
+                payment_provider,
+                config=config,
+                recipient="reviewer@example.com",
+            )
+            case = reconcile(session, demo, payment_provider, config)
+            diagnose_case(session, case.id)
+            action = schedule_demo_recovery_email(
+                session,
+                case.id,
+                settings=config,
+                now=NOW + timedelta(seconds=61),
+            )
+            action_ids.append(action.id)
+
+    def send(action_id):
+        with factory() as session:
+            return execute_demo_recovery_email(
+                session,
+                action_id,
+                provider=email_provider,
+                invoice_provider=payment_provider,
+                settings=config,
+                now=NOW + timedelta(seconds=120),
+            ).status
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert set(pool.map(send, action_ids)) == {"sent", "quota_blocked"}
+    with factory() as session:
+        assert session.scalar(
+            select(func.count(EmailDelivery.id)).where(
+                EmailDelivery.provider_email_id.is_not(None)
+            )
+        ) == 1
+        assert len(email_provider.calls) == 1

@@ -66,15 +66,16 @@ function EmptyLiveDemo() {
     <section className="live-empty">
       <span className="live-radar"><i /></span>
       <p className="eyebrow">No active public session</p>
-      <h2>Start with one real Razorpay test order.</h2>
+      <h2>Choose one Recovery Lab scenario.</h2>
       <p>
-        Dismiss Checkout or use a Razorpay failure path, then return here to watch the
-        diagnosis, Luna explanation, recovery action, and provider receipts update live.
+        Set up a Test Mode order, invoice, or subscription, then return here to watch one
+        coherent timeline separate browser intent, provider truth, deterministic decisions,
+        Luna explanation, and verified recovery.
       </p>
       <Link className="live-primary-link" href="/demo">
-        Start live checkout <span>→</span>
+        Open Recovery Lab <span>→</span>
       </Link>
-      <small>Test mode only · fixed ₹500 order · no automatic debit</small>
+      <small>Test mode only · no automatic debit · Scenario Lab remains synthetic and separate</small>
     </section>
   );
 }
@@ -129,9 +130,10 @@ export function LiveDemoDashboard() {
       ["POLICY_VALIDATED", "AI_PROPOSAL_REJECTED", "AI_DEGRADED"].includes(event.kind),
     );
   const checkoutOpened = projection.timeline.some((event) => event.kind === "checkout_opened");
+  const detectedAmount = projection.invoice?.detected_balance_paise ?? projection.subscription?.detected_balance_paise ?? projection.amount_paise;
   const stages = [
-    { label: projection.invoice ? "Invoice created" : "Order created", complete: true },
-    { label: projection.invoice ? "Invoice issued" : "Checkout opened", complete: projection.invoice ? projection.invoice.provider_status !== "draft" : checkoutOpened },
+    { label: projection.subscription ? "Subscription setup" : projection.invoice ? "Invoice setup" : "Order setup", complete: projection.setup_state === "READY" },
+    { label: projection.subscription ? "Provider state observed" : projection.invoice ? "Provider invoice issued" : "Checkout opened", complete: projection.subscription ? projection.subscription.last_checked_at !== null : projection.invoice ? projection.invoice.provider_status !== "draft" : checkoutOpened },
     { label: "Risk detected", complete: Boolean(currentCase) },
     { label: "Diagnosed", complete: Boolean(diagnosis) },
     { label: "Recovery ready", complete: projection.invoice ? projection.recovery_url_available || projection.state === "RECOVERED" : projection.recovery_actions.length > 0 },
@@ -160,14 +162,14 @@ export function LiveDemoDashboard() {
             <i /> {label(projection.state)}
           </span>
           <small>Session …{projection.session_id.slice(-10)}</small>
-          <Link href="/demo">{projection.invoice ? "View invoice setup" : "Open Checkout"}</Link>
+          <Link href="/demo">{projection.subscription ? "View subscription setup" : projection.invoice ? "View invoice setup" : "Open Checkout"}</Link>
           <button type="button" onClick={startNewDemo} disabled={startingNew}>
             {startingNew ? "Creating…" : "Start a new demo"}
           </button>
         </div>
       </header>
 
-      {projection.invoice && <p className="live-warning">Evidence: {label(projection.data_provenance)}{projection.setup_state === "ACTION_REQUIRED" ? " · Provider setup or merchant review required." : ""}</p>}
+      <p className="live-warning">Capability evidence: {label(projection.capability_evidence)} · Session evidence: {label(projection.data_provenance)}. Setup creates the test resource; detection begins only after browser intent is reconciled or provider state is observed.{projection.setup_state === "ACTION_REQUIRED" ? " Provider setup or merchant review is required." : ""}</p>
       {!expired && (projection.subscription ? <SubscriptionStatus subscription={projection.subscription} /> : projection.invoice ? <InvoiceStatus invoice={projection.invoice} /> : <AbandonmentStatus check={projection.abandonment_check} />)}
 
       <div className="acceptance-capture">
@@ -204,7 +206,7 @@ export function LiveDemoDashboard() {
 
       <div className="session-metrics-heading"><p className="eyebrow">This session</p><span>Global history cannot change these values</span></div>
       <section className="live-metrics session-only" aria-label="This session metrics">
-        <div><span>Detected amount</span><strong>{money(projection.invoice?.detected_balance_paise ?? projection.amount_paise)}</strong><small>{projection.invoice ? "original detected balance" : "server-fixed order"}</small></div>
+        <div><span>Detected amount</span><strong>{money(detectedAmount)}</strong><small>{projection.subscription ? "affected invoice only" : projection.invoice ? "original detected balance" : "server-fixed order"}</small></div>
         <div><span>Recovered amount</span><strong>{money(projection.metrics.recovered_amount_paise)}</strong><small>verified provider truth</small></div>
         <div><span>State</span><strong>{label(projection.state)}</strong><small>current session only</small></div>
         <div><span>Recovery latency</span><strong>{elapsed(projection.metrics.median_recovery_time_seconds)}</strong><small>detection to verified payment</small></div>
@@ -228,7 +230,7 @@ export function LiveDemoDashboard() {
             <span>{currentCase ? label(currentCase.state) : label(projection.state)}</span>
           </div>
           <div className="live-amount-row">
-            <div><span>Detected amount</span><strong>{money(projection.invoice?.detected_balance_paise ?? projection.amount_paise)}</strong></div>
+            <div><span>Detected amount</span><strong>{money(detectedAmount)}</strong></div>
             <div><span>End-to-end latency</span><strong>{elapsed(projection.end_to_end_latency_seconds)}</strong></div>
           </div>
           <div className="decision-cards">
@@ -266,7 +268,7 @@ export function LiveDemoDashboard() {
             <>
             {projection.recovery_url_available && (
               <p className="recovery-recheck-copy">
-                {projection.invoice ? "Before the invoice opens, the server verifies its current balance and payment eligibility." : "Before Checkout reopens, the server verifies that the original order is still unpaid."}
+                {projection.subscription ? "Before method update opens, the server verifies eligibility. Authorization repair cannot be counted as recovered money." : projection.invoice ? "Before the invoice opens, the server verifies its current balance and payment eligibility." : "Before Checkout reopens, the server verifies that the original order is still unpaid."}
               </p>
             )}
             <div className="live-action-list">
@@ -276,9 +278,9 @@ export function LiveDemoDashboard() {
                   <div><strong>{label(action.action_type)}</strong><small>{action.action_type === "recovery_link" ? "Customer-authorized original order" : `Due ${time(action.scheduled_for)}`}</small></div>
                   <span className={`action-status status-${action.status}`}>{label(action.status)}</span>
                   <div className="live-action-receipt"><span>Gate</span><strong>{action.gate_verdict ? label(action.gate_verdict) : "Pending"}</strong><small>{action.provider_receipt_id ? `Receipt …${action.provider_receipt_id.slice(-10)}` : "No provider receipt"}</small></div>
-                  {["recovery_link", "invoice_payment_link"].includes(action.action_type) && projection.recovery_path && !expired && (
+                  {["recovery_link", "invoice_payment_link", "subscription_method_update"].includes(action.action_type) && projection.recovery_path && !expired && (
                     <Link className="continue-recovery" href={projection.recovery_path}>
-                      Continue recovery <span>→</span>
+                      {action.action_type === "subscription_method_update" ? "Repair authorization" : "Continue recovery"} <span>→</span>
                     </Link>
                   )}
                 </div>

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from leakproof.actuators.executor import _gate_inputs, idempotency_key
@@ -188,6 +188,17 @@ def _usage_counts(session: Session, now: datetime) -> tuple[int, int]:
     return daily, monthly
 
 
+def _lock_email_quota(session: Session, recipient_hash_value: str) -> None:
+    """Serialize account and recipient quota decisions across PostgreSQL workers."""
+    if session.bind.dialect.name != "postgresql":
+        return
+    for key in ("resend:account", f"resend:recipient:{recipient_hash_value}"):
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+            {"key": key},
+        )
+
+
 def execute_demo_recovery_email(
     session: Session,
     action_id: str,
@@ -309,6 +320,7 @@ def execute_demo_recovery_email(
     if recipient.casefold() not in settings.allowed_demo_emails:
         return _preview(session, action, demo, status="preview_only", now=attempted_at)
 
+    _lock_email_quota(session, demo.recipient_hash)
     rolling_day = attempted_at - timedelta(days=1)
     recipient_sends = int(
         session.scalar(

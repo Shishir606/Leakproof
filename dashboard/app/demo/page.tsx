@@ -3,8 +3,8 @@ import { DemoCheckout } from "@/components/razorpay-checkout";
 import { Logo } from "@/components/shell";
 
 export const metadata = {
-  title: "Live Razorpay demo · Leakproof",
-  description: "Create a Razorpay test order and see revenue recovery telemetry in action.",
+  title: "Recovery Lab · Leakproof",
+  description: "Choose an evidence-labelled Razorpay Test Mode recovery rehearsal.",
 };
 
 export default function DemoPage() {
@@ -16,19 +16,19 @@ export default function DemoPage() {
       </header>
       <div className="checkout-layout">
         <section className="checkout-hero">
-          <p className="eyebrow">Live recovery lab</p>
-          <h1>Let one checkout <em>slip.</em><br />Watch the recovery spine catch it.</h1>
-          <p className="checkout-lede">A controlled, ₹500 Razorpay test flow. The browser reports intent; the payment provider supplies the truth.</p>
+          <p className="eyebrow">Recruiter recovery lab</p>
+          <h1>Five leak surfaces.<br /><em>One recovery spine.</em></h1>
+          <p className="checkout-lede">Choose a bounded Razorpay Test Mode rehearsal. Each card states what is available, what you need to do, and which evidence can support the result.</p>
           <div className="checkout-flow" aria-label="Demo flow">
-            <div><span>1</span><strong>Create</strong><small>Server-fixed order</small></div>
+            <div><span>1</span><strong>Set up</strong><small>Test resource</small></div>
             <i />
-            <div><span>2</span><strong>Attempt</strong><small>Razorpay Checkout</small></div>
+            <div><span>2</span><strong>Detect</strong><small>Browser or provider</small></div>
             <i />
-            <div><span>3</span><strong>Recover</strong><small>Same original order</small></div>
+            <div><span>3</span><strong>Recover</strong><small>Original obligation</small></div>
           </div>
           <aside className="checkout-proof">
             <span className="proof-mark">LP</span>
-            <p><strong>No browser-selected money.</strong> The API creates the order and returns only the public Checkout material.</p>
+            <p><strong>No fixture is presented as provider proof.</strong> Browser intent, provider state, deterministic decisions, and Luna explanations remain visibly distinct.</p>
           </aside>
         </section>
         <DemoCheckout />

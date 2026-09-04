@@ -586,9 +586,25 @@ button, select, input { font: inherit; }
   .assumption-lists ul { columns: 1; }
 }
 
-.checkout-scenarios { border: 1px solid #d5dedb; border-radius: 12px; padding: 14px; display: flex; gap: 16px; flex-wrap: wrap; }
-.checkout-scenarios legend { padding: 0 6px; font-weight: 600; }
-.checkout-scenarios label { display: flex; gap: 6px; align-items: center; font-size: 14px; }
+.scenario-cards { border: 0; display: grid; gap: 9px; margin: 0 0 17px; padding: 0; }
+.scenario-cards legend { font-size: 10px; font-weight: 800; margin-bottom: 9px; padding: 0; }
+.scenario-card { background: #faf9f5; border: 1px solid var(--line); border-radius: 11px; cursor: pointer; display: grid; gap: 7px; padding: 13px 14px 13px 42px; position: relative; transition: 150ms ease; }
+.scenario-card:hover:not(.unavailable) { border-color: #aeb9dc; transform: translateY(-1px); }
+.scenario-card:focus-within { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(49, 87, 213, 0.12); }
+.scenario-card.selected { background: #eef1fb; border-color: var(--blue); }
+.scenario-card.unavailable { background: #f1f0ec; color: #777e8c; cursor: not-allowed; }
+.scenario-card > input { height: 17px; left: 15px; margin: 0; position: absolute; top: 15px; width: 17px; }
+.scenario-card-heading { align-items: center; display: flex; gap: 9px; justify-content: space-between; }
+.scenario-card-heading strong { font-size: 11px; }
+.scenario-card-heading i { background: #e1f3ea; border-radius: 99px; color: var(--green); font-size: 7px; font-style: normal; font-weight: 800; letter-spacing: .35px; padding: 4px 6px; text-transform: uppercase; }
+.scenario-card.unavailable .scenario-card-heading i { background: #e2e1dd; color: #737985; }
+.scenario-evidence { color: var(--blue); font-size: 7px; font-weight: 850; letter-spacing: .55px; text-transform: uppercase; }
+.scenario-card > span:not(.scenario-card-heading):not(.scenario-evidence) { color: #606a7e; font-size: 8px; line-height: 1.45; }
+.scenario-card > span b { color: var(--ink); display: inline-block; font-size: 7px; letter-spacing: .35px; margin-right: 7px; min-width: 62px; text-transform: uppercase; }
+.scenario-card > small { border-top: 1px solid #dfe3ea; color: #7d8492; font-size: 7px; line-height: 1.45; margin-top: 2px; padding-top: 7px; }
+.scenario-capability-state { background: #f0f2f8; border: 1px solid #dce1ed; border-radius: 11px; color: var(--muted); font-size: 9px; margin-bottom: 17px; padding: 17px; }
+.scenario-capability-error { align-items: center; background: #fff0e8; border-color: #f3cfbf; color: #91452f; display: flex; justify-content: space-between; }
+.scenario-capability-error button { background: transparent; border: 1px solid currentColor; border-radius: 7px; color: inherit; cursor: pointer; font-size: 8px; font-weight: 800; padding: 6px 9px; }
 .abandonment-status { border: 1px solid #b6cfc5; border-radius: 12px; background: #eff8f4; color: #254c3e; padding: 18px; margin: 18px 0; }
 .abandonment-status p { font-size: 14px; line-height: 1.55; margin: 6px 0 0; }
 

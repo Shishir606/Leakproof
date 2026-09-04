@@ -169,6 +169,37 @@ def test_resend_adapter_retries_transient_failure_and_rejects_malformed_success(
     assert error.value.retryable is False
 
 
+def test_resend_timeout_retry_reuses_one_provider_idempotency_key():
+    attempts: list[str] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        attempts.append(request.headers["idempotency-key"])
+        if len(attempts) == 1:
+            raise httpx2.ReadTimeout("response lost after send", request=request)
+        return httpx2.Response(200, json={"id": "email_same_provider_resource"})
+
+    provider = ResendEmailProvider(
+        "re_test",
+        "demo@example.com",
+        client=httpx2.Client(transport=httpx2.MockTransport(handler)),
+        sleep=lambda _: None,
+    )
+    result = provider.send_recovery_email(
+        EmailSendRequest(
+            action_id="act_timeout",
+            case_id="case_timeout",
+            recipient="reviewer@example.com",
+            template_id="util_recovery_email_v1",
+            template_variables={"subject": "Recover", "body": "Use the signed link"},
+            idempotency_key="lp_action_timeout",
+        )
+    )
+
+    assert attempts == ["lp_action_timeout", "lp_action_timeout"]
+    assert result.provider_email_id == "email_same_provider_resource"
+    assert result.attempts == 2
+
+
 def test_allowlisted_delivery_is_delayed_and_idempotent(session_factory):
     config = settings()
     provider = FakeEmailProvider()

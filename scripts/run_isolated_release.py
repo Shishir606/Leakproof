@@ -115,7 +115,7 @@ def main() -> int:
         with (evidence / "release-gate.log").open("w") as log:
             for command in (
                 ["uv", "sync", "--extra", "dev", "--frozen"],
-                ["npm", "--prefix", "dashboard", "ci"],
+                ["npm", "--prefix", "dashboard", "ci", "--no-audit", "--no-fund"],
                 ["make", "release-gate-automated"],
             ):
                 result = subprocess.run(
@@ -137,6 +137,9 @@ def main() -> int:
         ):
             if source.exists():
                 shutil.copy2(source, evidence / source.name)
+        contract_evidence = snapshot / "artifacts" / "release-contract"
+        if contract_evidence.exists():
+            shutil.copytree(contract_evidence, evidence / "release-contract")
         summary.update({"finished_at": datetime.now(UTC).isoformat(), "exit_code": result,
                         "cleanup_exit_code": cleanup, "passed": result == 0 and cleanup == 0})
         (evidence / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")

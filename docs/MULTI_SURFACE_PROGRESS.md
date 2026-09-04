@@ -771,3 +771,137 @@ limited to simulation/contract execution. Enabling live detection still requires
 fixture validation against that capture, and a human re-authorization plus exact-invoice payment
 acceptance run; token-cancellation and expiry candidates remain unimplemented until equivalently
 scoped provider evidence exists.
+
+## 2026-09-04 — Unified recruiter Recovery Lab
+
+**Frontend implementation: complete. Automated browser contracts: pass. Provider status remains
+scenario-specific.**
+
+Reused the existing capability API, resource-discriminated session contracts, order/invoice/
+subscription setup flows, browser session resume, shared projection polling, one sanitized timeline,
+deterministic diagnosis and guardrail panels, Luna explanation panel, provider receipts, acceptance
+download, and scenario-specific recovery bootstraps. Scenario Lab remains an independent synthetic
+measurement surface; no simulator fixture was added to the interactive Recovery Lab.
+
+- Replaced the four-radio entry form with five keyboard-accessible scenario cards. Each shows live
+  availability, evidence level, provider prerequisites, detection proof, reviewer action and the
+  precise success condition. Capability loading and failure have dedicated status/alert states and
+  retry; session creation stays disabled until an enabled capability is known.
+- Kept mandate breakage visible but unavailable. Its contract evidence and pending provider reason
+  are readable without presenting a fixture replay as an interactive provider-verified demo.
+- Clarified setup versus detection, browser intent versus Razorpay evidence, deterministic authority
+  versus Luna explanation, and authorization repair versus captured recovered money.
+- Reused the shared timeline for every resource and exposed the existing subscription method-update
+  bootstrap as the scenario-specific **Repair authorization** control. Invoice and order controls
+  continue to recheck their original provider obligation before navigation.
+- Extended the intercepted browser contracts for the capability API and five-card selector. All four
+  enabled scenarios are selectable; mandate breakage is disabled; existing refresh/resume, expiry,
+  provider-unavailable, stale-link, mobile and successful-recovery checks remain green. These browser
+  artifacts are explicitly fixture-backed and do not claim provider rehearsal.
+
+### Verification
+
+- `dashboard: npm run check` — pass.
+- `dashboard: npm run build` — pass.
+- `uv run python scripts/check_track_a_browser.py` — 9 groups pass, zero page errors.
+- `uv run python scripts/check_track_b_browser.py` — 10 groups pass, zero page errors, including all
+  capability cards and enabled scenario controls.
+
+### UI complete; provider rehearsal pending
+
+- **Invoice overdue:** full-settlement provider evidence exists; partial-then-final and real
+  expiry/cancellation rehearsals remain pending.
+- **Subscription halt:** UI and contract flow are complete; configured-plan authorization, provider
+  pending/halted transition, method repair and exact-invoice settlement rehearsal remain pending.
+- **Mandate broken:** UI disclosure and unavailable state are complete; interactive launch remains
+  disabled pending qualified eMandate provider evidence, human re-authorization and exact-invoice
+  settlement.
+
+## 2026-09-04 — Multi-surface hardening and extended release gate
+
+**Audit fixes: complete. Automated disposable gate: PASS. Five-scenario real-provider gate:
+BLOCKED on the manual evidence listed below.** No production credential, provider write, payment,
+outbound email, commit, push or deployment was used by this hardening run.
+
+### Completed work reused
+
+The audit retained the signed durable webhook inbox, merchant/provider/mode resource namespace,
+one obligation owner, unique captured-payment ledger, precedence and late-relationship logic,
+append-only case timeline and replay, v2 purpose-bound recovery tokens, action cancellation,
+deterministic diagnosis, bounded Luna fallback, Redis rate limits, Resend allowlist/quotas,
+sanitized projections, public bundle scan, five-card capability UI, existing migrations and all
+surface-specific reconcilers. Existing duplicate, out-of-order, late-success, multi-cycle,
+merchant-isolation, token-misuse, provider-outage, cancellation and model-fallback tests were
+extended rather than replaced.
+
+### Missing hardening implemented
+
+- Razorpay `create_order` now makes exactly one POST attempt. Read operations retain bounded retry;
+  invoice create/issue and subscription create already used one attempt. A lost write response can
+  no longer cause the adapter to create a second provider resource. Resend timeout retry continues
+  to reuse the one action idempotency key and is now explicitly tested.
+- Razorpay webhook payloads are signature-checked and then stripped of customer email, phone,
+  contact, name, address, customer-details and notes fields before the durable inbox write. Entity
+  identifiers and reconciliation fields required for idempotent processing remain available.
+- PostgreSQL advisory locks now serialize account and recipient email-quota decisions. Two workers
+  racing under a limit of one produce one provider send and one quota-blocked preview.
+- Added a PostgreSQL race across `invoice.partially_paid`, `payment.captured`, `order.paid` and
+  `subscription.charged`. All four inbox rows process, one case remains open at the correct partial
+  balance, and the captured payment is stored and credited exactly once.
+- Acceptance exports now represent `MANDATE_BROKEN`, require exact invoice ownership and qualified
+  method-scoped evidence, prove authorization repair precedes and remains separate from monetary
+  settlement, and require merchant-scoped captured-payment uniqueness across every surface.
+- The validator has scenario-specific blocking schemas for all five scenarios, rejects
+  architecture-only claims and scenario/case mismatches, supports `--require-all-scenarios`, and
+  reports provider, contract and simulated evidence separately. `--require-live` rejects contract
+  or simulated artifacts. Checkout capability evidence now uses the telemetry-reconciled label;
+  invoice, subscription and mandate remain conservatively contract-labelled.
+- The automated release gate now emits and validates all five scenario artifacts. The separate
+  final provider-evidence target requires all five live scenarios. The isolated installer disables
+  npm audit/funding network calls and retains the generated acceptance artifacts with the logs.
+
+### Exact automated results
+
+Final evidence: [`artifacts/baseline/leakproof-release-7h0f2e2f/`](../artifacts/baseline/leakproof-release-7h0f2e2f/).
+The run used a credential-free source copy, distinct Compose project, fresh volume and loopback
+ports from **2026-09-04 10:59:51–11:01:22 UTC (16:29:51–16:31:22 IST)**. `summary.json` records
+exit code 0, cleanup exit code 0 and `passed=true`; provider calls were disabled.
+
+| Gate | Exact result |
+|---|---|
+| Images and disposable services | API and dashboard images built; isolated PostgreSQL/Redis/API/worker/Beat started; cleanup passed |
+| Migrations and PostgreSQL races | Fresh and frozen-`0010` paths reached `0011_multi_resource`, 28 public tables; **14 passed** across both paths, including concurrent webhook/payment credit and quota races |
+| Python quality floor | Ruff passed; **360 passed, 14 skipped, 89.32% coverage**, above the unchanged 85% floor. The skips are the same PostgreSQL cases executed separately above |
+| Dashboard and public secrets | TypeScript and Next.js production build passed; public bundle clear of **4** configured credential/canary values |
+| Immutable audit/foundation | Passed twice: 3 unique webhooks, one duplicate rejected, 4 ordered events (`DETECTED`, `ASSIGNED`, `SIGNAL`, `SIGNAL`), PostgreSQL append-only enforcement and replay parity |
+| Batch replay | 787 cases; replay kept 5,831 events, 992 actions, 163 attributions and scoreboard unchanged |
+| Frozen eval gates | Overall pass: 120 simulator-regression, 15 decision-quality and 64 injection/benign cases |
+| Luna unavailable/failure behavior | Synthetic incident pass: 47/52 current failures vs 4/100 baseline, 47 matching and 0 unrelated cases affected; disabled model opened 0 suppressions and audited safe no-action fallback |
+| Security | **19 passed** |
+| Five-scenario acceptance | **77 passed**; 7 sanitized exports validated across all five scenarios, reported honestly as provider=0, contract=0, simulated=7 |
+
+The first attempt was manually interrupted after npm's unrelated audit request stalled; the wrapper
+now uses `npm ci --no-audit --no-fund`. A second preflight stopped before tests because Docker was
+not running (exit 2; cleanup 1). After Docker started, one disposable run exposed and then fixed a
+quota-test settings-fixture call (images and migrations passed; cleanup 0). These are retained as
+failed harness attempts; none is counted as final release evidence.
+
+### Remaining manual/provider blockers
+
+- `make release-evidence` correctly remains red. The current invoice full-payment artifact predates
+  the new cross-surface uniqueness check and intentionally fails `invoice_partial_payment_kept_open`;
+  it is not relabelled. Capture a new provider-backed partial-then-final invoice run.
+- Capture a real provider expiry or cancellation invoice outcome with merchant review and no payment
+  CTA.
+- Configure the reviewed Test Mode plan and complete subscription authorization, exact-cycle
+  pending-to-halted transition, customer-authorized method repair and captured settlement of that
+  same invoice.
+- Capture qualified eMandate `mandate_not_active` provider evidence, human re-authorization and
+  exact-invoice settlement before enabling the mandate card. Until then it remains
+  `CONTRACT_VERIFIED` and disabled; a deterministic simulation is not provider evidence.
+- Optional allowlisted Resend delivery/click evidence is still absent. Preview and cancellation
+  prove safety behavior, not recipient delivery.
+
+The fresh 2026-09-04 checkout-abandonment artifact remains telemetry/provider reconciled, and the
+historical payment-failure artifact remains live-provider evidence. The final all-five provider
+gate will not pass by substituting contract or simulated exports for the missing rehearsals.

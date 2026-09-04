@@ -273,3 +273,36 @@ def test_bad_signature_is_rejected_before_persistence(client, session_factory):
     assert response.status_code == 401
     with session_factory() as session:
         assert session.scalar(select(func.count()).select_from(WebhookEvent)) == 0
+
+
+def test_provider_webhook_pii_is_redacted_before_durable_inbox(client, session_factory):
+    payload = payment_failed("pay_redacted")
+    entity = payload["payload"]["payment"]["entity"]
+    entity.update(
+        {
+            "email": "customer@example.com",
+            "contact": "+919999999999",
+            "customer_name": "Also Private",
+            "notes": {"name": "Private Customer", "safe": "drop the whole notes object"},
+            "customer_details": {
+                "billing_address": {"address": "Private street"},
+                "phone": "+918888888888",
+            },
+        }
+    )
+    response = post_webhook(client, payload, "evt_redacted")
+    assert response.status_code == 200
+
+    with session_factory() as session:
+        stored = session.scalar(
+            select(WebhookEvent).where(WebhookEvent.provider_event_key == "evt_redacted")
+        )
+        raw = json.dumps(stored.payload)
+        assert "pay_redacted" in raw and "order_same" in raw
+        for private in (
+            "customer@example.com",
+            "+919999999999",
+            "Private Customer",
+            "Also Private",
+        ):
+            assert private not in raw

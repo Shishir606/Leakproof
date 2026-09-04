@@ -333,6 +333,14 @@ def test_scenario_selection_is_exhaustive_but_unimplemented_routes_are_disabled(
     assert response.status_code == (201 if enabled else 409)
     capabilities = client.get("/demo/scenarios").json()
     assert {item["scenario_type"] for item in capabilities} == {item.value for item in LeakType}
+    evidence = {item["scenario_type"]: item["capability_evidence"] for item in capabilities}
+    assert evidence == {
+        "PAYMENT_FAILURE": "LIVE_PROVIDER_VERIFIED",
+        "CHECKOUT_ABANDON": "LIVE_TELEMETRY_PROVIDER_RECONCILED",
+        "INVOICE_OVERDUE": "CONTRACT_VERIFIED",
+        "SUBSCRIPTION_HALT": "CONTRACT_VERIFIED",
+        "MANDATE_BROKEN": "CONTRACT_VERIFIED",
+    }
     if enabled:
         demo = response.json()
         assert demo["scenario_type"] == scenario and demo["setup_state"] == "READY"

@@ -1,7 +1,8 @@
-.PHONY: install lint test test-coverage dashboard-check container-build release-infra fresh-migration-check batch-replay public-bundle-check ai-incident-evidence eval-gates security-tests acceptance-tests release-evidence demo-recording-check release-gate-automated release-gate test-august-27 test-august-28 test-august-29 test-api-august-29 test-api-august-30 test-api-august-31 test-api-september-1 test-api-september-2 test-api-september-3 test-api-september-4 test-august-30 test-august-31 test-september-1 test-september-2 test-september-3 test-september-4 evals sensitivity dashboard batch build up down migrate demo-webhook verify-foundation seed tunnel
+.PHONY: install lint test test-coverage dashboard-check container-build release-infra fresh-migration-check batch-replay public-bundle-check ai-incident-evidence eval-gates security-tests acceptance-tests release-contract-evidence release-evidence demo-recording-check release-gate-automated release-gate test-august-27 test-august-28 test-august-29 test-api-august-29 test-api-august-30 test-api-august-31 test-api-september-1 test-api-september-2 test-api-september-3 test-api-september-4 test-august-30 test-august-31 test-september-1 test-september-2 test-september-3 test-september-4 evals sensitivity dashboard batch build up down migrate demo-webhook verify-foundation seed tunnel
 
 PUBLIC_BUNDLE_CANARY := leakproof-release-browser-canary-2026-09-04
 ACCEPTANCE_ARTIFACT_DIR ?= artifacts/api-acceptance
+RELEASE_CONTRACT_DIR ?= artifacts/release-contract
 DEMO_RECORDING ?= artifacts/demo/leakproof-90s-backup.mp4
 
 .PHONY: release-gate-isolated
@@ -50,10 +51,13 @@ security-tests:
 	uv run pytest tests/test_api_security.py
 
 acceptance-tests:
-	uv run pytest tests/test_api_september_4.py tests/test_foundation_verifier.py tests/test_acceptance_artifacts.py
+	uv run pytest tests/test_api_september_4.py tests/test_track_b_invoices.py tests/test_track_c_subscriptions.py tests/test_foundation_verifier.py tests/test_acceptance_artifacts.py --acceptance-output-dir $(RELEASE_CONTRACT_DIR)
+
+release-contract-evidence: acceptance-tests
+	uv run python scripts/validate_acceptance_artifacts.py --directory $(RELEASE_CONTRACT_DIR) --require-all-scenarios
 
 release-evidence:
-	uv run python scripts/validate_acceptance_artifacts.py --directory $(ACCEPTANCE_ARTIFACT_DIR) --require-live --require-both-hero-paths
+	uv run python scripts/validate_acceptance_artifacts.py --directory $(ACCEPTANCE_ARTIFACT_DIR) --require-live --require-all-scenarios
 
 demo-recording-check:
 	uv run python scripts/validate_demo_recording.py --path $(DEMO_RECORDING)
@@ -72,7 +76,7 @@ release-gate-automated:
 	$(MAKE) eval-gates
 	$(MAKE) ai-incident-evidence
 	$(MAKE) security-tests
-	$(MAKE) acceptance-tests
+	$(MAKE) release-contract-evidence
 
 release-gate: release-gate-automated
 	$(MAKE) release-evidence

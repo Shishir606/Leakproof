@@ -34,6 +34,42 @@ ABANDONMENT_CHECKS = {
     "unpaid_order_rechecked",
     "original_order_reopened",
 }
+INVOICE_CHECKS = {
+    "case_detected",
+    "original_invoice_reused",
+    "invoice_due_policy_recorded",
+    "invoice_payment_ledger_unique",
+    "captured_payment_globally_unique",
+    "audit_projection_replay_matches",
+    "no_blocking_provider_failure",
+    "pending_contacts_cancelled",
+}
+SUBSCRIPTION_CHECKS = {
+    "case_detected",
+    "pending_to_halted_same_case",
+    "razorpay_owns_retries",
+    "no_app_owned_debit",
+    "method_update_rechecked",
+    "cycle_payment_ledger_unique",
+    "captured_payment_globally_unique",
+    "audit_projection_replay_matches",
+    "no_blocking_provider_failure",
+    "intentional_states_have_no_cta",
+}
+MANDATE_CHECKS = {
+    "case_detected",
+    "qualified_mandate_evidence",
+    "exact_invoice_owned",
+    "authorization_repair_separate_from_revenue",
+    "razorpay_owns_retries",
+    "no_app_owned_debit",
+    "method_update_rechecked",
+    "cycle_payment_ledger_unique",
+    "captured_payment_globally_unique",
+    "audit_projection_replay_matches",
+    "no_blocking_provider_failure",
+    "intentional_states_have_no_cta",
+}
 
 FORBIDDEN_KEY_FRAGMENTS = {
     "action_id",
@@ -98,17 +134,13 @@ def validate_file(path: Path, *, require_live: bool) -> DemoAcceptanceExport:
         raise ValueError(f"{path}: invalid acceptance artifact: {exc}") from exc
 
     checks = {item.check: item for item in artifact.checks}
+    declared_scenario = artifact.session.scenario_type
+    scenario = declared_scenario or (artifact.case.leak_type if artifact.case else None)
     required = REQUIRED_CHECKS.copy()
-    if artifact.session.scenario_type == "INVOICE_OVERDUE":
-        required = {
-            "case_detected",
-            "original_invoice_reused",
-            "invoice_due_policy_recorded",
-            "invoice_payment_ledger_unique",
-            "audit_projection_replay_matches",
-            "no_blocking_provider_failure",
-            "pending_contacts_cancelled",
-        }
+    if declared_scenario == "CHECKOUT_ABANDON":
+        required |= ABANDONMENT_CHECKS
+    if scenario == "INVOICE_OVERDUE":
+        required = INVOICE_CHECKS.copy()
         if artifact.invoice and artifact.invoice.disposition == "merchant_review":
             required |= {
                 "nonpayable_invoice_has_no_payment_cta",
@@ -124,18 +156,8 @@ def validate_file(path: Path, *, require_live: bool) -> DemoAcceptanceExport:
             }
         if artifact.case is None or artifact.case.leak_type != "INVOICE_OVERDUE":
             errors.append("invoice evidence requires an invoice-overdue case")
-    if artifact.session.scenario_type == "SUBSCRIPTION_HALT":
-        required = {
-            "case_detected",
-            "pending_to_halted_same_case",
-            "razorpay_owns_retries",
-            "no_app_owned_debit",
-            "method_update_rechecked",
-            "cycle_payment_ledger_unique",
-            "audit_projection_replay_matches",
-            "no_blocking_provider_failure",
-            "intentional_states_have_no_cta",
-        }
+    if scenario == "SUBSCRIPTION_HALT":
+        required = SUBSCRIPTION_CHECKS.copy()
         if artifact.session.state == "RECOVERED":
             required |= {
                 "exact_invoice_settled",
@@ -146,10 +168,26 @@ def validate_file(path: Path, *, require_live: bool) -> DemoAcceptanceExport:
             required.add("activation_not_counted_as_revenue")
         if artifact.case is None or artifact.case.leak_type != "SUBSCRIPTION_HALT":
             errors.append("subscription evidence requires a subscription-halt case")
+    if scenario == "MANDATE_BROKEN":
+        required = MANDATE_CHECKS.copy()
+        if artifact.session.state == "RECOVERED":
+            required |= {
+                "exact_invoice_settled",
+                "same_case_closed",
+                "recovered_revenue_is_captured",
+            }
+        else:
+            required.add("activation_not_counted_as_revenue")
+        if artifact.case is None or artifact.case.leak_type != "MANDATE_BROKEN":
+            errors.append("mandate evidence requires a mandate-broken case")
     if artifact.data_provenance == DataProvenance.LIVE_TELEMETRY_PROVIDER_RECONCILED:
         required |= ABANDONMENT_CHECKS
         if artifact.case is None or artifact.case.leak_type != "CHECKOUT_ABANDON":
             errors.append("telemetry-reconciled evidence requires a checkout-abandonment case")
+    if declared_scenario and artifact.case and declared_scenario != artifact.case.leak_type:
+        errors.append("session scenario and case leak type do not match")
+    if artifact.data_provenance == DataProvenance.ARCHITECTURE_READY:
+        errors.append("architecture readiness is not acceptance evidence")
     missing = sorted(required - checks.keys())
     if missing:
         errors.append("missing required checks: " + ", ".join(missing))
@@ -181,6 +219,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--require-live", action="store_true")
     parser.add_argument("--require-both-hero-paths", action="store_true")
+    parser.add_argument("--require-all-scenarios", action="store_true")
     return parser.parse_args()
 
 
@@ -204,10 +243,41 @@ def main() -> int:
                     "expected one successful artifact for each hero path; found "
                     + ", ".join(sorted(found))
                 )
+        if args.require_all_scenarios:
+            found = {
+                item.session.scenario_type or (item.case.leak_type if item.case else None)
+                for item in validated
+            }
+            required = {
+                "PAYMENT_FAILURE",
+                "CHECKOUT_ABANDON",
+                "INVOICE_OVERDUE",
+                "SUBSCRIPTION_HALT",
+                "MANDATE_BROKEN",
+            }
+            missing = sorted(required - found)
+            if missing:
+                raise ValueError("missing acceptance scenarios: " + ", ".join(missing))
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 1
-    print(f"validated {len(validated)} sanitized acceptance artifact(s)")
+    provider_evidence = sum(
+        item.data_provenance
+        in {
+            DataProvenance.LIVE_PROVIDER_VERIFIED,
+            DataProvenance.LIVE_TELEMETRY_PROVIDER_RECONCILED,
+        }
+        for item in validated
+    )
+    contract_evidence = sum(
+        item.data_provenance == DataProvenance.CONTRACT_VERIFIED for item in validated
+    )
+    simulated_evidence = len(validated) - provider_evidence - contract_evidence
+    print(
+        f"validated {len(validated)} sanitized acceptance artifact(s): "
+        f"provider={provider_evidence}, contract={contract_evidence}, "
+        f"simulated={simulated_evidence}"
+    )
     return 0
 
 

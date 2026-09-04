@@ -316,7 +316,11 @@ class AcceptanceSessionSummary(StrictContract):
 
 class AcceptanceCaseSummary(StrictContract):
     leak_type: Literal[
-        "PAYMENT_FAILURE", "CHECKOUT_ABANDON", "INVOICE_OVERDUE", "SUBSCRIPTION_HALT"
+        "PAYMENT_FAILURE",
+        "CHECKOUT_ABANDON",
+        "INVOICE_OVERDUE",
+        "SUBSCRIPTION_HALT",
+        "MANDATE_BROKEN",
     ]
     state: str
     deterministic_diagnosis_ready: bool
@@ -444,8 +448,8 @@ SCENARIO_CAPABILITIES = (
         scenario_type=LeakType.CHECKOUT_ABANDON,
         primary_entity_type="order",
         enabled=True,
-        capability_evidence=DataProvenance.LIVE_PROVIDER_VERIFIED,
-        reason="Existing order flow; telemetry-specific acceptance refresh is pending.",
+        capability_evidence=DataProvenance.LIVE_TELEMETRY_PROVIDER_RECONCILED,
+        reason="Browser dismissal and the original unpaid order were provider-reconciled.",
     ),
     ScenarioCapability(
         scenario_type=LeakType.INVOICE_OVERDUE,

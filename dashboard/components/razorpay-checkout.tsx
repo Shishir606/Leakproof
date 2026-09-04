@@ -12,8 +12,10 @@ import {
   createSession,
   DemoApiError,
   getRecoveryBootstrap,
+  getScenarios,
   verifyCheckoutPayment,
 } from "@/lib/demo-api";
+import type { LeakType, ScenarioCapability } from "@/lib/resource-types";
 import type {
   CheckoutEvent,
   CheckoutEventType,
@@ -40,6 +42,133 @@ type PublicCheckout = Pick<
   | "currency"
   | "expires_at"
 >;
+
+const SCENARIO_COPY: Record<LeakType, {
+  title: string;
+  prerequisite: string;
+  detection: string;
+  action: string;
+  outcome: string;
+}> = {
+  PAYMENT_FAILURE: {
+    title: "Payment failure",
+    prerequisite: "Razorpay Test Mode Checkout",
+    detection: "Provider failure or current payment verification",
+    action: "Trigger a test failure, then retry the original order",
+    outcome: "Captured payment closes the same case",
+  },
+  CHECKOUT_ABANDON: {
+    title: "Checkout abandonment",
+    prerequisite: "Razorpay Test Mode Checkout",
+    detection: "Browser dismissal, then provider unpaid-order recheck",
+    action: "Close Checkout, wait for confirmation, then reopen it",
+    outcome: "Captured payment closes the same case",
+  },
+  INVOICE_OVERDUE: {
+    title: "Invoice overdue",
+    prerequisite: "Configured test customer; hosted payment is human-completed",
+    detection: "Provider re-fetch confirms aged, outstanding balance",
+    action: "Pay the original hosted invoice; optionally observe a partial payment",
+    outcome: "Only verified settlement counts as recovered money",
+  },
+  SUBSCRIPTION_HALT: {
+    title: "Subscription halt",
+    prerequisite: "Configured reusable test plan and human authorization",
+    detection: "Provider pending or halted state tied to its exact invoice",
+    action: "Authorize, induce the provider state, then update the payment method",
+    outcome: "Repair is separate from captured invoice settlement",
+  },
+  MANDATE_BROKEN: {
+    title: "Mandate broken",
+    prerequisite: "Qualified eMandate evidence from the test account",
+    detection: "Method-specific signed provider evidence",
+    action: "Review the contract path; live rehearsal remains gated",
+    outcome: "Re-authorization and recovered money stay separate",
+  },
+};
+
+const SCENARIO_ORDER: LeakType[] = [
+  "PAYMENT_FAILURE",
+  "CHECKOUT_ABANDON",
+  "INVOICE_OVERDUE",
+  "SUBSCRIPTION_HALT",
+  "MANDATE_BROKEN",
+];
+
+function evidenceLabel(value: ScenarioCapability["capability_evidence"]) {
+  return value === "LIVE_PROVIDER_VERIFIED"
+    ? "Provider verified"
+    : value === "LIVE_TELEMETRY_PROVIDER_RECONCILED"
+      ? "Telemetry + provider reconciled"
+      : value === "CONTRACT_VERIFIED"
+        ? "Contract verified"
+        : value === "SIMULATED_END_TO_END"
+          ? "Fixture / simulated"
+          : "Architecture ready";
+}
+
+function ScenarioChooser({
+  capabilities,
+  error,
+  loading,
+  selected,
+  locked,
+  onRetry,
+  onSelect,
+}: {
+  capabilities: ScenarioCapability[];
+  error: string | null;
+  loading: boolean;
+  selected: LeakType;
+  locked: boolean;
+  onRetry: () => void;
+  onSelect: (scenario: LeakType) => void;
+}) {
+  if (loading) {
+    return <div className="scenario-capability-state" role="status">Checking available provider rehearsals…</div>;
+  }
+  if (error) {
+    return (
+      <div className="scenario-capability-state scenario-capability-error" role="alert">
+        <span>{error}</span>
+        <button type="button" onClick={onRetry}>Try again</button>
+      </div>
+    );
+  }
+  const byType = new Map(capabilities.map((item) => [item.scenario_type, item]));
+  return (
+    <fieldset className="scenario-cards" disabled={locked}>
+      <legend>Choose one provider rehearsal</legend>
+      {SCENARIO_ORDER.map((scenario) => {
+        const capability = byType.get(scenario);
+        const copy = SCENARIO_COPY[scenario];
+        const unavailable = !capability?.enabled;
+        return (
+          <label className={`scenario-card${selected === scenario ? " selected" : ""}${unavailable ? " unavailable" : ""}`} key={scenario}>
+            <input
+              type="radio"
+              name="scenario"
+              aria-label={copy.title}
+              checked={selected === scenario}
+              disabled={locked || unavailable}
+              onChange={() => onSelect(scenario)}
+            />
+            <span className="scenario-card-heading">
+              <strong>{copy.title}</strong>
+              <i>{unavailable ? "Unavailable" : "Available"}</i>
+            </span>
+            <span className="scenario-evidence">{capability ? evidenceLabel(capability.capability_evidence) : "Capability unavailable"}</span>
+            <span><b>Requires</b>{copy.prerequisite}</span>
+            <span><b>Detection</b>{copy.detection}</span>
+            <span><b>Your action</b>{copy.action}</span>
+            <span><b>Success means</b>{copy.outcome}</span>
+            {capability?.reason && <small>{capability.reason}</small>}
+          </label>
+        );
+      })}
+    </fieldset>
+  );
+}
 
 function eventId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
@@ -247,12 +376,31 @@ function OrderReceipt({ checkout, recovered }: { checkout: PublicCheckout; recov
 export function DemoCheckout() {
   const router = useRouter();
   const [recipient, setRecipient] = useState("");
-  const [scenario, setScenario] = useState<"CHECKOUT_ABANDON" | "PAYMENT_FAILURE" | "INVOICE_OVERDUE" | "SUBSCRIPTION_HALT">("CHECKOUT_ABANDON");
+  const [scenario, setScenario] = useState<LeakType>("CHECKOUT_ABANDON");
+  const [capabilities, setCapabilities] = useState<ScenarioCapability[]>([]);
+  const [capabilitiesLoading, setCapabilitiesLoading] = useState(true);
+  const [capabilitiesError, setCapabilitiesError] = useState<string | null>(null);
   const [session, setSession] = useState<DemoSession>();
   const [state, setState] = useState<CheckoutState>("idle");
   const [message, setMessage] = useState("A fixed ₹500 test order will be created on the server.");
   const preparing = useRef(false);
   const { projection, error: projectionError, expired } = useSessionProjection(session);
+  const selectedCapability = capabilities.find((item) => item.scenario_type === scenario);
+  const scenarioReady = Boolean(selectedCapability?.enabled) && !capabilitiesLoading && !capabilitiesError;
+
+  const loadCapabilities = useCallback(async () => {
+    setCapabilitiesLoading(true);
+    setCapabilitiesError(null);
+    try {
+      setCapabilities(await getScenarios());
+    } catch (error) {
+      setCapabilitiesError(errorMessage(error));
+    } finally {
+      setCapabilitiesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void loadCapabilities(); }, [loadCapabilities]);
 
   useEffect(() => {
     try {
@@ -319,13 +467,15 @@ export function DemoCheckout() {
         <h2>{scenario === "INVOICE_OVERDUE" ? "Recover an overdue test invoice." : scenario === "SUBSCRIPTION_HALT" ? "Recover a pending or halted subscription." : "Open a real Razorpay test Checkout."}</h2>
         <p>Dismiss it, trigger a test failure, or complete it. Leakproof records bounded browser signals while server-verified Razorpay sandbox truth decides payment success.</p>
       </div>
-      <fieldset className="checkout-scenarios" disabled={Boolean(session) && !expired}>
-        <legend>Choose a rehearsal</legend>
-        <label><input type="radio" name="scenario" checked={scenario === "CHECKOUT_ABANDON"} onChange={() => setScenario("CHECKOUT_ABANDON")} /> Checkout abandonment</label>
-        <label><input type="radio" name="scenario" checked={scenario === "PAYMENT_FAILURE"} onChange={() => setScenario("PAYMENT_FAILURE")} /> Payment failure</label>
-        <label><input type="radio" name="scenario" checked={scenario === "INVOICE_OVERDUE"} onChange={() => setScenario("INVOICE_OVERDUE")} /> Overdue invoice</label>
-        <label><input type="radio" name="scenario" checked={scenario === "SUBSCRIPTION_HALT"} onChange={() => setScenario("SUBSCRIPTION_HALT")} /> Subscription halt</label>
-      </fieldset>
+      <ScenarioChooser
+        capabilities={capabilities}
+        error={capabilitiesError}
+        loading={capabilitiesLoading}
+        selected={scenario}
+        locked={Boolean(session) && !expired}
+        onRetry={() => void loadCapabilities()}
+        onSelect={setScenario}
+      />
       <p>{scenario === "SUBSCRIPTION_HALT" ? "Authorize a subscription on the configured reusable test plan. Razorpay owns recurring retries; Leakproof only correlates the exact unpaid cycle and offers a customer-authorized method update." : scenario === "INVOICE_OVERDUE" ? "Create a test invoice with partial payments enabled. Wait for its business due date, then pay part and the remaining balance on the original hosted invoice." : scenario === "CHECKOUT_ABANDON" ? "Open Checkout, close it without paying, then watch the waiting and provider recheck below. Continue recovery once the original order is confirmed unpaid." : "Use a Razorpay test failure, then follow the recovery case. Provider-confirmed failure takes precedence over dismissal."}</p>
       <label className="checkout-field">
         <span>Recovery email <small>optional</small></span>
@@ -340,7 +490,7 @@ export function DemoCheckout() {
         <small>Only allowlisted addresses receive mail. Others stay preview-only.</small>
       </label>
       {session?.primary_entity_type === "order" && <OrderReceipt checkout={session} />}
-      <button className="checkout-primary" type="button" onClick={start} disabled={state === "preparing" || (!expired && (state === "open" || projection?.state === "RECOVERED" || Boolean(projection?.recovery_path)))}>
+      <button className="checkout-primary" type="button" onClick={start} disabled={state === "preparing" || (!session && !scenarioReady) || (!expired && (state === "open" || projection?.state === "RECOVERED" || Boolean(projection?.recovery_path)))}>
         {state === "preparing" ? "Preparing secure Checkout…" : expired ? "Start a new rehearsal" : scenario === "SUBSCRIPTION_HALT" ? (session ? "View subscription" : "Create & authorize subscription") : scenario === "INVOICE_OVERDUE" ? (session ? "View invoice" : "Create test invoice") : session ? "Resume Checkout" : scenario === "CHECKOUT_ABANDON" ? "Start checkout abandonment" : "Create test order & open Checkout"}
         <span aria-hidden="true">→</span>
       </button>
